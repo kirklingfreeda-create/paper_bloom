@@ -2,7 +2,6 @@ import * as THREE from "./vendor/three.module.min.js";
 
 const control = document.querySelector(".paper-interaction");
 const canvasWrap = document.querySelector(".canvas-wrap");
-const photoBall = document.querySelector(".photo-ball");
 const hint = document.querySelector(".hint");
 const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -101,9 +100,7 @@ const material = new THREE.MeshStandardMaterial({
   roughness: 0.94,
   metalness: 0,
   side: THREE.DoubleSide,
-  flatShading: false,
-  transparent: true,
-  opacity: 0
+  flatShading: false
 });
 
 const paper = new THREE.Mesh(geometry, material);
@@ -157,13 +154,6 @@ let pointerY = 0;
 function updateComposition(amount) {
   const release = smootherstep(amount);
   updateGeometry(release);
-
-  const meshReveal = smootherstep(THREE.MathUtils.clamp((amount - 0.075) / 0.24, 0, 1));
-  const photoFade = smootherstep(THREE.MathUtils.clamp((amount - 0.035) / 0.27, 0, 1));
-  material.opacity = meshReveal;
-  photoBall.style.opacity = String(1 - photoFade);
-  photoBall.style.transform = `translate(-50%,-50%) rotate(${THREE.MathUtils.lerp(-1.5, 2.3, photoFade)}deg) scale(${THREE.MathUtils.lerp(.92, 1.055, photoFade)})`;
-  photoBall.style.filter = `saturate(.98) contrast(1.01) blur(${photoFade * 0.7}px)`;
 
   paper.rotation.x = THREE.MathUtils.lerp(-0.28, -0.025 + pointerY * 0.025, release);
   paper.rotation.y = THREE.MathUtils.lerp(0.47, pointerX * 0.045, release);
