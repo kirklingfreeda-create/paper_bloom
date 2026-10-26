@@ -15,14 +15,14 @@ renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.NoToneMapping;
 canvasWrap.appendChild(renderer.domElement);
 
-scene.add(new THREE.HemisphereLight(0xfffbef, 0x53616a, 0.9));
-const keyLight = new THREE.DirectionalLight(0xfff0cf, 3.25);
-keyLight.position.set(-4.2, 5.2, 7.5);
+scene.add(new THREE.HemisphereLight(0xfffbef, 0x46525a, 0.46));
+const keyLight = new THREE.DirectionalLight(0xffefd0, 3.8);
+keyLight.position.set(-5.4, 6.2, 7.2);
 scene.add(keyLight);
-const sideLight = new THREE.DirectionalLight(0x9dbad0, 0.72);
-sideLight.position.set(4.8, -1.5, 5.2);
+const sideLight = new THREE.DirectionalLight(0x9dbad0, 0.22);
+sideLight.position.set(4.8, -1.8, 4.4);
 scene.add(sideLight);
-const edgeLight = new THREE.DirectionalLight(0xffffff, 0.46);
+const edgeLight = new THREE.DirectionalLight(0xffffff, 0.14);
 edgeLight.position.set(0.5, 1.2, -5);
 scene.add(edgeLight);
 
@@ -48,8 +48,8 @@ function makePaperNodes() {
   const add = (x, y, boundary = false) => nodes.push({ x, y, boundary });
   const halfW = PAPER_WIDTH / 2;
   const halfH = PAPER_HEIGHT / 2;
-  const edgeColumns = 17;
-  const edgeRows = 23;
+  const edgeColumns = 23;
+  const edgeRows = 31;
 
   add(-halfW, -halfH, true);
   add(halfW, -halfH, true);
@@ -69,11 +69,11 @@ function makePaperNodes() {
   // Poisson-like rejection keeps the random cells readable and prevents
   // clusters of tiny, game-like triangles.
   let attempts = 0;
-  while (nodes.length < 184 && attempts < 5000) {
+  while (nodes.length < 296 && attempts < 9000) {
     attempts += 1;
     const x = THREE.MathUtils.lerp(-halfW + 0.08, halfW - 0.08, random());
     const y = THREE.MathUtils.lerp(-halfH + 0.08, halfH - 0.08, random());
-    const clear = nodes.every((node) => Math.hypot(node.x - x, node.y - y) > 0.145);
+    const clear = nodes.every((node) => Math.hypot(node.x - x, node.y - y) > 0.102);
     if (clear) add(x, y);
   }
   return nodes;
@@ -211,18 +211,37 @@ nodes.forEach((node, index) => {
   const foldB = triangleWave(v * 4.74 - u * 1.91 - 0.36);
   const foldC = triangleWave((u + v) * 5.28 + 0.22);
   const randomKick = hashNoise(index + 3, index * 0.37 + 11);
-  // One near-complete wrap creates a compact, visibly continuous shell.
-  // Small angular kicks make neighbouring planes collide without sending
-  // connected triangles into separate-looking layers.
-  const azimuth = -(u - 0.5) * Math.PI * 1.92
-    + foldB * 0.27 + randomKick * 0.085;
-  const latitude = (v - 0.5) * Math.PI * 0.9
-    + foldA * 0.16 - foldC * 0.055;
-  const radius = 0.68 + foldA * 0.105 + foldB * 0.078 + foldC * 0.058 + randomKick * 0.035;
-  const cosLatitude = Math.cos(latitude);
-  crumpled[i3] = radius * cosLatitude * Math.cos(azimuth) + foldB * 0.1 - 0.03;
-  crumpled[i3 + 1] = radius * Math.sin(latitude) * 0.93 + foldA * 0.08;
-  crumpled[i3 + 2] = radius * cosLatitude * Math.sin(azimuth) + foldC * 0.11;
+  const edgeDamping = node.boundary ? 0.3 : 1;
+  // Radial compression: the centre stays on the visible front while the
+  // perimeter is pressed around toward the rear. This avoids a latitude seam
+  // and reads as a sheet being compacted in several directions.
+  const centredU = (u - 0.5) * 2;
+  const centredV = (v - 0.5) * 2;
+  const radial = Math.min(Math.hypot(centredU, centredV), 1);
+  const azimuth = Math.atan2(centredV, centredU)
+    + (foldB * 0.23 + randomKick * 0.075) * edgeDamping;
+  const polar = THREE.MathUtils.clamp(
+    radial * Math.PI * 0.92 + (foldA * 0.13 - foldC * 0.045) * edgeDamping,
+    0,
+    Math.PI * 0.96
+  );
+  const radiusNoise = node.boundary ? 0.58 : 1;
+  const radius = 0.68 - (node.boundary ? 0.06 : 0)
+    + (foldA * 0.095 + foldB * 0.072 + foldC * 0.052 + randomKick * 0.048) * radiusNoise;
+  const sinPolar = Math.sin(polar);
+  const shellX = radius * sinPolar * Math.cos(azimuth);
+  const shellY = radius * sinPolar * Math.sin(azimuth);
+  const shellZ = radius * Math.cos(polar);
+  const compressionBand = 0.88 + (triangleWave(v * 3.1 + foldC * 0.2) + 1) * 0.045;
+  const lateralShift = Math.sin((v - 0.5) * Math.PI * 3.2) * 0.055;
+  const facetKickX = hashNoise(index + 41, index * 0.71 + 5) * 0.026 * edgeDamping;
+  const facetKickY = hashNoise(index + 83, index * 0.43 + 17) * 0.026 * edgeDamping;
+  const facetKickZ = hashNoise(index + 127, index * 0.59 + 29) * 0.085 * edgeDamping;
+  // Uneven axial compression creates a tall, lopsided paper bundle rather
+  // than a uniformly imploded sphere.
+  crumpled[i3] = shellX * compressionBand * 0.9 + foldB * 0.065 + lateralShift + facetKickX - 0.025;
+  crumpled[i3 + 1] = shellY * 1.06 + foldA * 0.055 + facetKickY - 0.025;
+  crumpled[i3 + 2] = shellZ * compressionBand * 0.74 + foldC * 0.072 + facetKickZ;
 });
 
 geometry.setAttribute("position", new THREE.BufferAttribute(crumpled.slice(), 3));
@@ -413,11 +432,21 @@ function updateComposition(amount) {
   const release = smootherstep(amount);
   updateGeometry(release);
 
-  paper.rotation.x = THREE.MathUtils.lerp(-0.28, -0.025 + pointerY * 0.025, release);
-  paper.rotation.y = THREE.MathUtils.lerp(0.47, pointerX * 0.045, release);
-  paper.rotation.z = THREE.MathUtils.lerp(-0.19, -0.012, release);
-  const scale = THREE.MathUtils.lerp(1.33, 1, release);
-  paper.scale.setScalar(scale);
+  paper.rotation.x = THREE.MathUtils.lerp(-0.18, -0.025 + pointerY * 0.025, release);
+  paper.rotation.y = THREE.MathUtils.lerp(0.36, pointerX * 0.045, release);
+  paper.rotation.z = THREE.MathUtils.lerp(-0.1, -0.012, release);
+  // The first part of the motion releases axial compression; the second
+  // settles the expanded surface into its rectangular proportions.
+  const decompression = smootherstep(THREE.MathUtils.clamp(release / 0.42, 0, 1));
+  const flattening = smootherstep(THREE.MathUtils.clamp((release - 0.18) / 0.82, 0, 1));
+  const compressedX = THREE.MathUtils.lerp(1.3, 1.12, decompression);
+  const compressedY = THREE.MathUtils.lerp(1.28, 1.14, decompression);
+  const compressedZ = THREE.MathUtils.lerp(0.78, 1.08, decompression);
+  paper.scale.set(
+    THREE.MathUtils.lerp(compressedX, 1, flattening),
+    THREE.MathUtils.lerp(compressedY, 1, flattening),
+    THREE.MathUtils.lerp(compressedZ, 1, flattening)
+  );
 }
 
 function resize() {
@@ -441,8 +470,8 @@ function animate(now) {
   }
 
   updateComposition(progress);
-  keyLight.position.x = -4.2 + pointerX * 1.2;
-  keyLight.position.y = 5.2 - pointerY * 0.8;
+  keyLight.position.x = -5.4 + pointerX * 0.8;
+  keyLight.position.y = 6.2 - pointerY * 0.55;
   renderer.render(scene, camera);
   requestAnimationFrame(animate);
 }
