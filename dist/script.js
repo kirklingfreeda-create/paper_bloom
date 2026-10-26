@@ -14,14 +14,16 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 canvasWrap.appendChild(renderer.domElement);
 
-scene.add(new THREE.HemisphereLight(0xfffbef, 0x60717e, 2.35));
-const keyLight = new THREE.DirectionalLight(0xfff5db, 4.5);
+scene.add(new THREE.HemisphereLight(0xfffbef, 0x60717e, 1.35));
+const keyLight = new THREE.DirectionalLight(0xfff5db, 2.65);
 keyLight.position.set(-3.6, 4.8, 6.5);
 scene.add(keyLight);
-const rimLight = new THREE.DirectionalLight(0xb9d0da, 2.4);
+const rimLight = new THREE.DirectionalLight(0xb9d0da, 1.4);
 rimLight.position.set(4.5, -2, 4);
 scene.add(rimLight);
 
+// One continuous sheet. A moderately coarse triangulation is intentional:
+// flat face normals create the broad, sharp planes of dry writing paper.
 const geometry = new THREE.PlaneGeometry(3.18, 4.24, 58, 76);
 const position = geometry.attributes.position;
 const vertexCount = position.count;
@@ -35,45 +37,96 @@ function ridge(x, y, angle, offset, width, height) {
 }
 
 function paperCreases(x, y) {
-  const sharpCreases = ridge(x,y,.41,-.22,.09,.07) + ridge(x,y,2.22,.35,.085,.052) +
-    ridge(x,y,1.42,-.63,.074,.042) + ridge(x,y,2.76,-.84,.078,.034);
-  const softMemory = Math.sin(x*3.2+y*2.1)*Math.sin(y*2.8-x*1.7)*.014;
-  const sideCurl = Math.pow(Math.abs(x)/1.59,10)*Math.sin(y*1.34+.45)*.055;
-  const cornerCurl = Math.pow(Math.max(0,(y-1.55)/.57),3)*Math.sin(x*2.4)*.045;
+  const sharpCreases = ridge(x,y,.41,-.22,.075,.038) + ridge(x,y,2.22,.35,.072,.027) +
+    ridge(x,y,1.42,-.63,.064,.021) + ridge(x,y,2.76,-.84,.066,.017);
+  const softMemory = Math.sin(x*3.2+y*2.1)*Math.sin(y*2.8-x*1.7)*.008;
+  const sideCurl = Math.pow(Math.abs(x)/1.59,10)*Math.sin(y*1.34+.45)*.033;
+  const cornerCurl = Math.pow(Math.max(0,(y-1.55)/.57),3)*Math.sin(x*2.4)*.027;
   return sharpCreases + softMemory + sideCurl + cornerCurl;
+}
+
+function triangleWave(value) {
+  const wrapped = ((value % 2) + 2) % 2;
+  return 1 - 2 * Math.abs(wrapped - 1);
 }
 
 for (let index = 0; index < vertexCount; index += 1) {
   const x = position.getX(index), y = position.getY(index), u = x / 1.59, v = y / 2.12, i3 = index * 3;
   flat[i3] = x; flat[i3+1] = y; flat[i3+2] = paperCreases(x,y);
-  const phi = u*Math.PI*2.05 + v*1.38 + Math.sin(v*6.2)*.31;
-  const latitude = v*Math.PI*.83 + Math.sin(u*7.1)*.2;
-  const crush = Math.sin(u*15.3+v*7.7)*.085 + Math.sin(u*5.8-v*16.4)*.06 + Math.cos((u+v)*13.2)*.045;
-  const radius = .72 + crush + Math.abs(Math.sin(u*9.4)*Math.cos(v*8.7))*.07;
+  const broadFoldA = triangleWave(u*3.7 + v*2.15);
+  const broadFoldB = triangleWave(v*4.2 - u*1.65 + .43);
+  const phi = u*Math.PI*2.28 + v*1.55 + broadFoldB*.34 + Math.sin(v*5.4)*.18;
+  const latitude = v*Math.PI*.86 + broadFoldA*.22 + Math.sin(u*6.1)*.1;
+  const crush = broadFoldA*.105 + broadFoldB*.085 +
+    Math.sin(u*11.3+v*6.7)*.06 + Math.cos((u-v)*9.2)*.04;
+  const radius = .69 + crush + Math.abs(Math.sin(u*7.2)*Math.cos(v*6.8))*.085;
   const cosLatitude = Math.cos(latitude);
-  crumpled[i3] = radius*cosLatitude*Math.cos(phi) + Math.sin(v*18)*.045;
-  crumpled[i3+1] = radius*Math.sin(latitude)*.9 + Math.sin(u*13)*.055;
-  crumpled[i3+2] = radius*cosLatitude*Math.sin(phi) + Math.cos((u-v)*17)*.055;
+  crumpled[i3] = radius*cosLatitude*Math.cos(phi) + broadFoldB*.075;
+  crumpled[i3+1] = radius*Math.sin(latitude)*.92 + broadFoldA*.07;
+  crumpled[i3+2] = radius*cosLatitude*Math.sin(phi) + triangleWave((u-v)*4.6)*.07;
   position.setXYZ(index,crumpled[i3],crumpled[i3+1],crumpled[i3+2]);
 }
 geometry.computeVertexNormals();
 
-const texture = new THREE.TextureLoader().load("./assets/paper-pattern.png", () => {
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
-  texture.needsUpdate = true;
+function makePaperBumpTexture() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 256; canvas.height = 256;
+  const context = canvas.getContext("2d");
+  const image = context.createImageData(256,256);
+  let seed = 4817;
+  const random = () => ((seed = (seed*1664525+1013904223)>>>0) / 4294967296);
+  for (let i=0;i<image.data.length;i+=4) {
+    const grain = 118 + random()*30 + Math.sin((i/4%256)*.7)*3;
+    image.data[i]=grain; image.data[i+1]=grain; image.data[i+2]=grain; image.data[i+3]=255;
+  }
+  context.putImageData(image,0,0);
+  context.globalAlpha=.2; context.strokeStyle="#f2f2f2"; context.lineWidth=.55;
+  for (let i=0;i<240;i+=1) {
+    const x=random()*256, y=random()*256, length=4+random()*22;
+    context.beginPath(); context.moveTo(x,y); context.quadraticCurveTo(x+length*.45,y+(random()-.5)*4,x+length,y+(random()-.5)*7); context.stroke();
+  }
+  const result = new THREE.CanvasTexture(canvas);
+  result.wrapS=THREE.RepeatWrapping; result.wrapT=THREE.RepeatWrapping; result.repeat.set(2.8,3.7);
+  return result;
+}
+
+const bumpTexture = makePaperBumpTexture();
+const material = new THREE.MeshPhysicalMaterial({
+  color:0xfffcf5, roughness:.91, metalness:0, clearcoat:0,
+  bumpMap:bumpTexture, bumpScale:.045, side:THREE.DoubleSide, flatShading:true
 });
-const material = new THREE.MeshStandardMaterial({ map:texture, roughness:.93, metalness:0, side:THREE.DoubleSide });
+
+new THREE.TextureLoader().load("./assets/paper-pattern.png", source => {
+  const canvas=document.createElement("canvas"); canvas.width=512; canvas.height=682;
+  const context=canvas.getContext("2d");
+  context.fillStyle="#fbfaf6"; context.fillRect(0,0,canvas.width,canvas.height);
+  context.globalAlpha=.3; context.filter="saturate(.72) contrast(.88)";
+  context.drawImage(source.image,0,0,canvas.width,canvas.height);
+  context.filter="none"; context.globalAlpha=1;
+  const printTexture=new THREE.CanvasTexture(canvas);
+  printTexture.colorSpace=THREE.SRGBColorSpace;
+  printTexture.anisotropy=renderer.capabilities.getMaxAnisotropy();
+  material.map=printTexture; material.needsUpdate=true;
+});
 const paper = new THREE.Mesh(geometry, material);
 paper.rotation.set(-.22,.42,-.17);
 scene.add(paper);
 
-let progress = reduceMotion ? 1 : 0, target = progress, velocity = 0;
+// Always enter as a paper ball. Reduced-motion users still get the same
+// starting composition; only the transition becomes immediate after a click.
+let progress = 0, target = 0, velocity = 0;
 let pointerX = 0, pointerY = 0, previousTime = performance.now(), normalFrame = 0;
+let paperFaceted = true;
 
 function smootherstep(value) { const t = THREE.MathUtils.clamp(value,0,1); return t*t*t*(t*(t*6-15)+10); }
 function updateGeometry(amount) {
   const eased = smootherstep(amount);
+  const shouldBeFaceted = amount < .64;
+  if (shouldBeFaceted !== paperFaceted) {
+    paperFaceted = shouldBeFaceted;
+    material.flatShading = paperFaceted;
+    material.needsUpdate = true;
+  }
   for (let index=0; index<vertexCount; index+=1) {
     const i3=index*3;
     position.setXYZ(index,
@@ -86,6 +139,8 @@ function updateGeometry(amount) {
   paper.rotation.x=THREE.MathUtils.lerp(-.22,-.035+pointerY*.035,eased);
   paper.rotation.y=THREE.MathUtils.lerp(.42,pointerX*.06,eased);
   paper.rotation.z=THREE.MathUtils.lerp(-.17,-.015,eased);
+  const paperScale=THREE.MathUtils.lerp(1.34,1,eased);
+  paper.scale.setScalar(paperScale);
 }
 function resize() {
   const width=canvasWrap.clientWidth, height=canvasWrap.clientHeight;
