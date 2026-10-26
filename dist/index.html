@@ -5,37 +5,18 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#ece9e2" />
     <title>Paper Bloom</title>
-    <meta name="description" content="Click a crumpled paper sculpture to unfold it." />
+    <meta name="description" content="Click a continuous crumpled paper sculpture to unfold it." />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
     <main class="stage">
-      <div class="atmosphere" aria-hidden="true"></div>
+      <div class="ambient-glow" aria-hidden="true"></div>
       <button class="paper-interaction" type="button" aria-label="展开纸团" aria-pressed="false">
-        <span class="paper-shadow" aria-hidden="true"></span>
-        <span class="paper" aria-hidden="true">
-          <span class="pieces"></span>
-          <svg class="creases" viewBox="0 0 736 981" preserveAspectRatio="none">
-            <defs>
-              <filter id="soften">
-                <feGaussianBlur stdDeviation="0.85" />
-              </filter>
-            </defs>
-            <g filter="url(#soften)">
-              <path d="M7 154 C134 118 210 201 356 142 S589 96 731 187" />
-              <path d="M22 481 C162 442 229 518 364 470 S584 413 718 489" />
-              <path d="M14 744 C128 700 255 793 387 726 S606 677 725 754" />
-              <path d="M167 4 C151 164 226 265 191 391 S128 634 202 977" />
-              <path d="M453 2 C426 152 496 252 447 392 S395 660 473 979" />
-              <path d="M6 28 L724 957" class="fine" />
-              <path d="M726 57 L33 934" class="fine" />
-            </g>
-          </svg>
-          <span class="paper-sheen"></span>
-        </span>
+        <span class="ground-shadow" aria-hidden="true"></span>
+        <span class="canvas-wrap" aria-hidden="true"></span>
         <span class="hint">CLICK TO UNFOLD</span>
       </button>
     </main>
-    <script src="./script.js"></script>
+    <script type="module" src="./script.js"></script>
   </body>
 </html>
