@@ -2,6 +2,7 @@ import * as THREE from "./vendor/three.module.min.js";
 
 const control = document.querySelector(".paper-interaction");
 const canvasWrap = document.querySelector(".canvas-wrap");
+const photoBall = document.querySelector(".photo-ball");
 const hint = document.querySelector(".hint");
 const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -26,11 +27,12 @@ const edgeLight = new THREE.DirectionalLight(0xffffff, 0.72);
 edgeLight.position.set(0.5, 1.2, -5);
 scene.add(edgeLight);
 
-// A deliberately coarse, non-indexed sheet. Large planar triangles and flat
-// normals make the material read as stiff paper instead of a soft cloth mesh.
+// A dense, continuous sheet. The early crumpled state is supplied by the
+// approved photograph; this mesh takes over only once the outer folds begin
+// to release, so its job is to preserve a continuous paper surface.
 const PAPER_WIDTH = 3.18;
 const PAPER_HEIGHT = 4.24;
-const geometry = new THREE.PlaneGeometry(PAPER_WIDTH, PAPER_HEIGHT, 18, 24).toNonIndexed();
+const geometry = new THREE.PlaneGeometry(PAPER_WIDTH, PAPER_HEIGHT, 42, 56);
 const position = geometry.attributes.position;
 const vertexCount = position.count;
 const opened = new Float32Array(vertexCount * 3);
@@ -68,8 +70,8 @@ for (let index = 0; index < vertexCount; index += 1) {
   opened[i3 + 1] = y;
   opened[i3 + 2] = openedRelief(x, y);
 
-  // Preserve the sheet's angular character while packing it into an irregular
-  // crumple. Quantised ridges create long facets and pointed d-cone-like peaks.
+  // An irregular packed state with straight ridge families. It is never shown
+  // alone; it provides continuity underneath the photographic start frame.
   const foldA = triangleWave(u * 3.55 + v * 1.82 + 0.17);
   const foldB = triangleWave(v * 4.1 - u * 1.47 - 0.36);
   const foldC = triangleWave((u + v) * 4.65 + 0.22);
@@ -99,46 +101,49 @@ const material = new THREE.MeshStandardMaterial({
   roughness: 0.94,
   metalness: 0,
   side: THREE.DoubleSide,
-  flatShading: true
+  flatShading: false,
+  transparent: true,
+  opacity: 0
 });
 
 const paper = new THREE.Mesh(geometry, material);
 scene.add(paper);
-
-const POSE_COUNT = 13;
-const poses = Array.from({ length: POSE_COUNT }, () => new Float32Array(vertexCount * 3));
 
 function smootherstep(value) {
   const t = THREE.MathUtils.clamp(value, 0, 1);
   return t * t * t * (t * (t * 6 - 15) + 10);
 }
 
-// Pre-bake a short sequence of held poses. Real stop-motion paper does not
-// continuously melt between a ball and a rectangle: facets pop open, pause,
-// then another group releases.
-for (let poseIndex = 0; poseIndex < POSE_COUNT; poseIndex += 1) {
-  const t = poseIndex / (POSE_COUNT - 1);
-  const release = smootherstep(t);
-  const snap = Math.sin(t * Math.PI);
-  const pose = poses[poseIndex];
-
+function updateGeometry(amount) {
   for (let index = 0; index < vertexCount; index += 1) {
     const i3 = index * 3;
     const x = opened[i3];
     const y = opened[i3 + 1];
     const u = x / (PAPER_WIDTH / 2);
     const v = y / (PAPER_HEIGHT / 2);
-    const sector = triangleWave(u * 2.1 - v * 1.62 + poseIndex * 0.13);
-    const hinge = triangleWave(u * 3.05 + v * 2.46 - poseIndex * 0.18);
-    const middleKick = snap * (1 - release) * 0.2;
+    const edge = Math.pow(Math.max(Math.abs(u), Math.abs(v)), 0.72);
+    const releaseDelay = 0.025 + (1 - edge) * 0.27
+      + (triangleWave(u * 2.4 + v * 1.7) + 1) * 0.014;
+    const localRelease = smootherstep(THREE.MathUtils.clamp(
+      (amount - releaseDelay) / Math.max(1 - releaseDelay, 0.001), 0, 1
+    ));
+    const openingPulse = Math.sin(localRelease * Math.PI);
+    const remaining = 1 - localRelease;
+    const sector = triangleWave(u * 2.08 - v * 1.58 + amount * 0.42);
+    const hinge = triangleWave(u * 2.92 + v * 2.32 - amount * 0.36);
+    const middleKick = openingPulse * remaining;
 
-    pose[i3] = THREE.MathUtils.lerp(crumpled[i3], opened[i3], release)
-      + sector * middleKick * (0.8 + Math.abs(v) * 0.35);
-    pose[i3 + 1] = THREE.MathUtils.lerp(crumpled[i3 + 1], opened[i3 + 1], release)
-      + hinge * middleKick * 0.72;
-    pose[i3 + 2] = THREE.MathUtils.lerp(crumpled[i3 + 2], opened[i3 + 2], release)
-      + (sector * 0.55 + hinge * 0.35) * snap * (1 - t) * 0.34;
+    position.setXYZ(index,
+      THREE.MathUtils.lerp(crumpled[i3], opened[i3], localRelease)
+        + sector * middleKick * (0.18 + edge * 0.1),
+      THREE.MathUtils.lerp(crumpled[i3 + 1], opened[i3 + 1], localRelease)
+        + hinge * middleKick * (0.13 + edge * 0.075),
+      THREE.MathUtils.lerp(crumpled[i3 + 2], opened[i3 + 2], localRelease)
+        + (sector * 0.6 + hinge * 0.4) * openingPulse * remaining * (0.31 + edge * 0.12)
+    );
   }
+  position.needsUpdate = true;
+  geometry.computeVertexNormals();
 }
 
 let progress = 0;
@@ -146,32 +151,23 @@ let target = 0;
 let transitionFrom = 0;
 let transitionStart = 0;
 let transitionActive = false;
-let activePose = -1;
 let pointerX = 0;
 let pointerY = 0;
 
-function applyPose(poseIndex) {
-  if (poseIndex === activePose) return;
-  activePose = poseIndex;
-  const pose = poses[poseIndex];
-  for (let index = 0; index < vertexCount; index += 1) {
-    const i3 = index * 3;
-    position.setXYZ(index, pose[i3], pose[i3 + 1], pose[i3 + 2]);
-  }
-  position.needsUpdate = true;
-  geometry.computeVertexNormals();
-}
-
 function updateComposition(amount) {
   const release = smootherstep(amount);
-  const poseIndex = Math.round(release * (POSE_COUNT - 1));
-  applyPose(poseIndex);
+  updateGeometry(release);
 
-  // Each held pose gets a tiny, deterministic stop-motion registration error.
-  const jitter = Math.sin(poseIndex * 91.37) * (1 - release);
-  paper.rotation.x = THREE.MathUtils.lerp(-0.28, -0.025 + pointerY * 0.025, release) + jitter * 0.009;
-  paper.rotation.y = THREE.MathUtils.lerp(0.47, pointerX * 0.045, release) - jitter * 0.012;
-  paper.rotation.z = THREE.MathUtils.lerp(-0.19, -0.012, release) + jitter * 0.008;
+  const meshReveal = smootherstep(THREE.MathUtils.clamp((amount - 0.075) / 0.24, 0, 1));
+  const photoFade = smootherstep(THREE.MathUtils.clamp((amount - 0.035) / 0.27, 0, 1));
+  material.opacity = meshReveal;
+  photoBall.style.opacity = String(1 - photoFade);
+  photoBall.style.transform = `translate(-50%,-50%) rotate(${THREE.MathUtils.lerp(-1.5, 2.3, photoFade)}deg) scale(${THREE.MathUtils.lerp(.92, 1.055, photoFade)})`;
+  photoBall.style.filter = `saturate(.98) contrast(1.01) blur(${photoFade * 0.7}px)`;
+
+  paper.rotation.x = THREE.MathUtils.lerp(-0.28, -0.025 + pointerY * 0.025, release);
+  paper.rotation.y = THREE.MathUtils.lerp(0.47, pointerX * 0.045, release);
+  paper.rotation.z = THREE.MathUtils.lerp(-0.19, -0.012, release);
   const scale = THREE.MathUtils.lerp(1.33, 1, release);
   paper.scale.setScalar(scale);
 }
@@ -186,7 +182,7 @@ function resize() {
 
 function animate(now) {
   if (transitionActive) {
-    const duration = reduceMotion ? 1 : 1180;
+    const duration = reduceMotion ? 1 : 1350;
     const elapsed = THREE.MathUtils.clamp((now - transitionStart) / duration, 0, 1);
     const travel = smootherstep(elapsed);
     progress = THREE.MathUtils.lerp(transitionFrom, target, travel);

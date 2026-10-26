@@ -19,12 +19,21 @@ body { min-height: 100svh; overflow: hidden; background: var(--background); font
   border: 0; padding: 0; color: var(--ink); background: transparent; cursor: pointer; -webkit-tap-highlight-color: transparent;
 }
 .paper-interaction:focus-visible { outline: 1px solid rgba(75,91,99,.55); outline-offset: 6px; border-radius: 26px; }
-.canvas-wrap { position: absolute; inset: 0; display: block; }
+.canvas-wrap { position: absolute; inset: 0; z-index: 1; display: block; }
 .canvas-wrap canvas { display: block; width: 100%; height: 100%; }
+.photo-ball {
+  position: absolute; left: 50%; top: 50%; z-index: 2; display: block;
+  width: min(56vmin, 390px); aspect-ratio: 3 / 4; pointer-events: none;
+  transform: translate(-50%,-50%) rotate(-1.5deg) scale(.92); transform-origin: 50% 61%;
+  filter: saturate(.98) contrast(1.01); will-change: opacity, transform, filter;
+  -webkit-mask-image: radial-gradient(ellipse 58% 48% at 50% 61%, #000 0 58%, rgba(0,0,0,.96) 66%, transparent 82%);
+  mask-image: radial-gradient(ellipse 58% 48% at 50% 61%, #000 0 58%, rgba(0,0,0,.96) 66%, transparent 82%);
+}
+.photo-ball img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .ground-shadow {
   position: absolute; left: 50%; top: 54%; width: 150px; height: 46px; border-radius: 50%;
   background: rgba(42,48,50,.34); filter: blur(14px); transform: translate(-50%,-50%) rotate(-4deg); opacity: .8;
-  transition: width 1.25s cubic-bezier(.2,.75,.2,1), height 1.25s cubic-bezier(.2,.75,.2,1), top 1.25s cubic-bezier(.2,.75,.2,1), opacity .9s ease, filter 1.25s ease;
+  transition: width 1.8s cubic-bezier(.2,.75,.2,1), height 1.8s cubic-bezier(.2,.75,.2,1), top 1.8s cubic-bezier(.2,.75,.2,1), opacity 1.2s ease, filter 1.8s ease;
 }
 .hint {
   position: absolute; left: 50%; bottom: 1.5%; translate: -50% 0; white-space: nowrap;
@@ -33,5 +42,5 @@ body { min-height: 100svh; overflow: hidden; background: var(--background); font
 .paper-interaction:hover .hint { opacity: .9; transform: translateY(-2px); }
 .paper-interaction.is-open .ground-shadow { top: 78%; width: min(54vw,410px); height: 34px; opacity: .22; filter: blur(22px); }
 .paper-interaction.is-open .hint { opacity: .28; }
-@media (max-width: 640px) { .paper-interaction { width: 100vw; height: 88svh; } .hint { bottom: 2%; } }
+@media (max-width: 640px) { .paper-interaction { width: 100vw; height: 88svh; } .photo-ball { width: min(72vw, 350px); } .hint { bottom: 2%; } }
 @media (prefers-reduced-motion: reduce) { .ground-shadow, .hint { transition-duration: .01ms !important; } }
