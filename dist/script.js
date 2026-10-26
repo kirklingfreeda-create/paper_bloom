@@ -15,93 +15,225 @@ renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.NoToneMapping;
 canvasWrap.appendChild(renderer.domElement);
 
-scene.add(new THREE.AmbientLight(0xffffff, 1.08));
-const keyLight = new THREE.DirectionalLight(0xfff2d5, 3.05);
+scene.add(new THREE.HemisphereLight(0xfffbef, 0x53616a, 0.9));
+const keyLight = new THREE.DirectionalLight(0xfff0cf, 3.25);
 keyLight.position.set(-4.2, 5.2, 7.5);
 scene.add(keyLight);
-const sideLight = new THREE.DirectionalLight(0xaec7d8, 0.9);
+const sideLight = new THREE.DirectionalLight(0x9dbad0, 0.72);
 sideLight.position.set(4.8, -1.5, 5.2);
 scene.add(sideLight);
-const edgeLight = new THREE.DirectionalLight(0xffffff, 0.72);
+const edgeLight = new THREE.DirectionalLight(0xffffff, 0.46);
 edgeLight.position.set(0.5, 1.2, -5);
 scene.add(edgeLight);
 
-// One indexed sheet: every triangular panel shares vertices with its
-// neighbours. A deliberately moderate tessellation keeps the folded planes
-// broad and angular instead of smoothing the ball into a cloth-like surface.
+// One indexed Delaunay sheet. Random Voronoi nodes replace the old uniform
+// grid, while shared indices guarantee that every fold remains connected.
 const PAPER_WIDTH = 3.18;
 const PAPER_HEIGHT = 4.24;
-const WIDTH_SEGMENTS = 18;
-const HEIGHT_SEGMENTS = 24;
-const geometry = new THREE.PlaneGeometry(
-  PAPER_WIDTH,
-  PAPER_HEIGHT,
-  WIDTH_SEGMENTS,
-  HEIGHT_SEGMENTS
-);
-const position = geometry.attributes.position;
-const vertexCount = position.count;
-const opened = new Float32Array(vertexCount * 3);
-const crumpled = new Float32Array(vertexCount * 3);
+const random = (() => {
+  let seed = 0x51f2a9d3;
+  return () => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
+})();
 
 function hashNoise(x, y) {
   const value = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
   return (value - Math.floor(value)) * 2 - 1;
 }
 
+function makePaperNodes() {
+  const nodes = [];
+  const add = (x, y, boundary = false) => nodes.push({ x, y, boundary });
+  const halfW = PAPER_WIDTH / 2;
+  const halfH = PAPER_HEIGHT / 2;
+  const edgeColumns = 17;
+  const edgeRows = 23;
+
+  add(-halfW, -halfH, true);
+  add(halfW, -halfH, true);
+  add(halfW, halfH, true);
+  add(-halfW, halfH, true);
+  for (let i = 1; i < edgeColumns; i += 1) {
+    const x = THREE.MathUtils.lerp(-halfW, halfW, i / edgeColumns);
+    add(x, -halfH, true);
+    add(x, halfH, true);
+  }
+  for (let i = 1; i < edgeRows; i += 1) {
+    const y = THREE.MathUtils.lerp(-halfH, halfH, i / edgeRows);
+    add(-halfW, y, true);
+    add(halfW, y, true);
+  }
+
+  // Poisson-like rejection keeps the random cells readable and prevents
+  // clusters of tiny, game-like triangles.
+  let attempts = 0;
+  while (nodes.length < 184 && attempts < 5000) {
+    attempts += 1;
+    const x = THREE.MathUtils.lerp(-halfW + 0.08, halfW - 0.08, random());
+    const y = THREE.MathUtils.lerp(-halfH + 0.08, halfH - 0.08, random());
+    const clear = nodes.every((node) => Math.hypot(node.x - x, node.y - y) > 0.145);
+    if (clear) add(x, y);
+  }
+  return nodes;
+}
+
+function circumcircle(a, b, c) {
+  const d = 2 * (a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y));
+  if (Math.abs(d) < 1e-9) return { x: 0, y: 0, radius2: -1 };
+  const aa = a.x * a.x + a.y * a.y;
+  const bb = b.x * b.x + b.y * b.y;
+  const cc = c.x * c.x + c.y * c.y;
+  const x = (aa * (b.y - c.y) + bb * (c.y - a.y) + cc * (a.y - b.y)) / d;
+  const y = (aa * (c.x - b.x) + bb * (a.x - c.x) + cc * (b.x - a.x)) / d;
+  return { x, y, radius2: (x - a.x) ** 2 + (y - a.y) ** 2 };
+}
+
+function makeTriangle(a, b, c, nodes) {
+  const area = (nodes[b].x - nodes[a].x) * (nodes[c].y - nodes[a].y)
+    - (nodes[b].y - nodes[a].y) * (nodes[c].x - nodes[a].x);
+  const triangle = area < 0 ? { a, b: c, c: b } : { a, b, c };
+  triangle.circle = circumcircle(nodes[triangle.a], nodes[triangle.b], nodes[triangle.c]);
+  return triangle;
+}
+
+function delaunay(inputNodes) {
+  const nodes = inputNodes.slice();
+  const span = Math.max(PAPER_WIDTH, PAPER_HEIGHT) * 8;
+  const superStart = nodes.length;
+  nodes.push(
+    { x: -span, y: -span },
+    { x: span, y: -span },
+    { x: 0, y: span }
+  );
+  let triangles = [makeTriangle(superStart, superStart + 1, superStart + 2, nodes)];
+
+  for (let pointIndex = 0; pointIndex < inputNodes.length; pointIndex += 1) {
+    const point = nodes[pointIndex];
+    const bad = triangles.filter((triangle) => {
+      if (triangle.circle.radius2 < 0) return false;
+      const dx = point.x - triangle.circle.x;
+      const dy = point.y - triangle.circle.y;
+      return dx * dx + dy * dy <= triangle.circle.radius2 + 1e-8;
+    });
+    const badSet = new Set(bad);
+    const polygon = new Map();
+    const addEdge = (a, b) => {
+      const key = a < b ? `${a}:${b}` : `${b}:${a}`;
+      const existing = polygon.get(key);
+      if (existing) existing.count += 1;
+      else polygon.set(key, { a, b, count: 1 });
+    };
+    bad.forEach((triangle) => {
+      addEdge(triangle.a, triangle.b);
+      addEdge(triangle.b, triangle.c);
+      addEdge(triangle.c, triangle.a);
+    });
+    triangles = triangles.filter((triangle) => !badSet.has(triangle));
+    polygon.forEach((edge) => {
+      if (edge.count === 1) triangles.push(makeTriangle(edge.a, edge.b, pointIndex, nodes));
+    });
+  }
+
+  return triangles.filter((triangle) => (
+    triangle.a < superStart && triangle.b < superStart && triangle.c < superStart
+  ));
+}
+
+const nodes = makePaperNodes();
+const triangles = delaunay(nodes);
+const indexArray = [];
+const uniqueEdges = new Map();
+triangles.forEach((triangle) => {
+  indexArray.push(triangle.a, triangle.b, triangle.c);
+  [[triangle.a, triangle.b], [triangle.b, triangle.c], [triangle.c, triangle.a]].forEach(([a, b]) => {
+    const key = a < b ? `${a}:${b}` : `${b}:${a}`;
+    if (!uniqueEdges.has(key)) uniqueEdges.set(key, { a: Math.min(a, b), b: Math.max(a, b) });
+  });
+});
+
+// A restrained subset of actual Delaunay edges becomes persistent crease
+// memory. These lines cannot cross because they belong to the triangulation.
+const creaseEdges = [...uniqueEdges.values()]
+  .filter((edge) => {
+    const a = nodes[edge.a];
+    const b = nodes[edge.b];
+    const length = Math.hypot(a.x - b.x, a.y - b.y);
+    return !a.boundary && !b.boundary && length > 0.19 && length < 0.62;
+  })
+  .sort((left, right) => hashNoise(left.a, left.b) - hashNoise(right.a, right.b))
+  .slice(0, 18)
+  .map((edge, index) => ({
+    ...edge,
+    amplitude: (0.026 + Math.abs(hashNoise(edge.a + 7, edge.b + 13)) * 0.026)
+      * (index % 2 ? -1 : 1)
+  }));
+
+function openedRelief(x, y) {
+  let z = 0;
+  creaseEdges.forEach((edge) => {
+    const a = nodes[edge.a];
+    const b = nodes[edge.b];
+    const ex = b.x - a.x;
+    const ey = b.y - a.y;
+    const length2 = ex * ex + ey * ey;
+    const length = Math.sqrt(length2);
+    const along = ((x - a.x) * ex + (y - a.y) * ey) / length2;
+    if (along <= -0.12 || along >= 1.12) return;
+    const signedDistance = ((x - a.x) * ey - (y - a.y) * ex) / length;
+    const alongEnvelope = Math.pow(Math.max(0, Math.sin(Math.PI * THREE.MathUtils.clamp(along, 0, 1))), 0.55);
+    const side = Math.sign(signedDistance) || 1;
+    const wedge = side * Math.min(Math.abs(signedDistance) / 0.14, 1);
+    z += wedge * Math.exp(-Math.abs(signedDistance) / 0.24) * alongEnvelope * edge.amplitude;
+  });
+  return z;
+}
+
+const geometry = new THREE.BufferGeometry();
+const vertexCount = nodes.length;
+const opened = new Float32Array(vertexCount * 3);
+const crumpled = new Float32Array(vertexCount * 3);
+const uvs = new Float32Array(vertexCount * 2);
+
+nodes.forEach((node, index) => {
+  const u = node.x / PAPER_WIDTH + 0.5;
+  const v = node.y / PAPER_HEIGHT + 0.5;
+  const i3 = index * 3;
+  const i2 = index * 2;
+  opened[i3] = node.x;
+  opened[i3 + 1] = node.y;
+  opened[i3 + 2] = openedRelief(node.x, node.y);
+  uvs[i2] = u;
+  uvs[i2 + 1] = v;
+
+  const foldA = triangleWave(u * 4.12 + v * 2.23 + 0.17);
+  const foldB = triangleWave(v * 4.74 - u * 1.91 - 0.36);
+  const foldC = triangleWave((u + v) * 5.28 + 0.22);
+  const randomKick = hashNoise(index + 3, index * 0.37 + 11);
+  // One near-complete wrap creates a compact, visibly continuous shell.
+  // Small angular kicks make neighbouring planes collide without sending
+  // connected triangles into separate-looking layers.
+  const azimuth = -(u - 0.5) * Math.PI * 1.92
+    + foldB * 0.27 + randomKick * 0.085;
+  const latitude = (v - 0.5) * Math.PI * 0.9
+    + foldA * 0.16 - foldC * 0.055;
+  const radius = 0.68 + foldA * 0.105 + foldB * 0.078 + foldC * 0.058 + randomKick * 0.035;
+  const cosLatitude = Math.cos(latitude);
+  crumpled[i3] = radius * cosLatitude * Math.cos(azimuth) + foldB * 0.1 - 0.03;
+  crumpled[i3 + 1] = radius * Math.sin(latitude) * 0.93 + foldA * 0.08;
+  crumpled[i3 + 2] = radius * cosLatitude * Math.sin(azimuth) + foldC * 0.11;
+});
+
+geometry.setAttribute("position", new THREE.BufferAttribute(crumpled.slice(), 3));
+geometry.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
+geometry.setIndex(indexArray);
+geometry.computeVertexNormals();
+const position = geometry.attributes.position;
+
 function triangleWave(value) {
   const wrapped = ((value % 2) + 2) % 2;
   return 1 - 2 * Math.abs(wrapped - 1);
-}
-
-function crease(x, y, angle, offset, width, height) {
-  const distance = x * Math.cos(angle) + y * Math.sin(angle) - offset;
-  const envelope = Math.exp(-Math.pow(distance / width, 2));
-  return triangleWave(distance / width) * envelope * height;
-}
-
-function openedRelief(x, y) {
-  // Sparse straight folds, not all-over noise. Paper remembers a few hard
-  // creases while the printed surface remains legible and colour-accurate.
-  return crease(x, y, 0.39, -0.16, 0.078, 0.033)
-    + crease(x, y, 2.21, 0.31, 0.073, -0.027)
-    + crease(x, y, 1.45, -0.66, 0.065, 0.021)
-    + crease(x, y, 2.72, -0.92, 0.061, -0.017)
-    + Math.pow(Math.abs(x) / (PAPER_WIDTH / 2), 12) * Math.sin(y * 1.45) * 0.022;
-}
-
-for (let index = 0; index < vertexCount; index += 1) {
-  const column = index % (WIDTH_SEGMENTS + 1);
-  const row = Math.floor(index / (WIDTH_SEGMENTS + 1));
-  const onEdge = column === 0 || column === WIDTH_SEGMENTS
-    || row === 0 || row === HEIGHT_SEGMENTS;
-  // Break the regular diagonal rhythm without separating a single vertex.
-  // The outside contour remains an exact rectangle when fully unfolded.
-  const jitterX = onEdge ? 0 : hashNoise(column, row) * 0.032;
-  const jitterY = onEdge ? 0 : hashNoise(row + 19, column + 7) * 0.032;
-  const x = position.getX(index) + jitterX;
-  const y = position.getY(index) + jitterY;
-  const u = x / (PAPER_WIDTH / 2);
-  const v = y / (PAPER_HEIGHT / 2);
-  const i3 = index * 3;
-
-  opened[i3] = x;
-  opened[i3 + 1] = y;
-  opened[i3 + 2] = openedRelief(x, y);
-
-  // An irregular packed state with straight ridge families. It is never shown
-  // alone; it provides continuity underneath the photographic start frame.
-  const foldA = triangleWave(u * 3.55 + v * 1.82 + 0.17);
-  const foldB = triangleWave(v * 4.1 - u * 1.47 - 0.36);
-  const foldC = triangleWave((u + v) * 4.65 + 0.22);
-  const azimuth = u * Math.PI * 2.05 + v * 1.34 + foldB * 0.43;
-  const latitude = v * Math.PI * 0.78 + foldA * 0.3 - foldC * 0.08;
-  const radius = 0.66 + foldA * 0.11 + foldB * 0.085 + foldC * 0.065;
-  const cosLatitude = Math.cos(latitude);
-
-  crumpled[i3] = radius * cosLatitude * Math.cos(azimuth) + foldB * 0.09 - 0.04;
-  crumpled[i3 + 1] = radius * Math.sin(latitude) * 0.91 + foldA * 0.075;
-  crumpled[i3 + 2] = radius * cosLatitude * Math.sin(azimuth) + foldC * 0.105;
 }
 
 const texture = await new Promise((resolve, reject) => {
@@ -112,18 +244,122 @@ texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
 texture.wrapS = THREE.ClampToEdgeWrapping;
 texture.wrapT = THREE.ClampToEdgeWrapping;
 
+function segmentDistance(px, py, ax, ay, bx, by) {
+  const ex = bx - ax;
+  const ey = by - ay;
+  const length2 = ex * ex + ey * ey;
+  const t = THREE.MathUtils.clamp(((px - ax) * ex + (py - ay) * ey) / length2, 0, 1);
+  return Math.hypot(px - (ax + ex * t), py - (ay + ey * t));
+}
+
+function createCreaseNormalMap() {
+  const size = 384;
+  const height = new Float32Array(size * size);
+  const creaseMask = new Float32Array(size * size);
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      const u = x / (size - 1);
+      const v = y / (size - 1);
+      let value = 0.5
+        + Math.sin(x * 0.19 + Math.sin(y * 0.047) * 2.1) * 0.0024
+        + Math.sin(y * 0.23 + x * 0.031) * 0.0018;
+      creaseEdges.forEach((edge) => {
+        const a = nodes[edge.a];
+        const b = nodes[edge.b];
+        const ax = a.x / PAPER_WIDTH + 0.5;
+        const ay = a.y / PAPER_HEIGHT + 0.5;
+        const bx = b.x / PAPER_WIDTH + 0.5;
+        const by = b.y / PAPER_HEIGHT + 0.5;
+        const distance = segmentDistance(u, v, ax, ay, bx, by);
+        const ridge = Math.exp(-Math.pow(distance / 0.0095, 2));
+        value += ridge * 0.095;
+        creaseMask[y * size + x] = Math.max(creaseMask[y * size + x], ridge);
+      });
+      height[y * size + x] = value;
+    }
+  }
+
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const context = canvas.getContext("2d");
+  const image = context.createImageData(size, size);
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      const left = height[y * size + Math.max(0, x - 1)];
+      const right = height[y * size + Math.min(size - 1, x + 1)];
+      const down = height[Math.max(0, y - 1) * size + x];
+      const up = height[Math.min(size - 1, y + 1) * size + x];
+      let nx = -(right - left) * 6.4;
+      let ny = -(up - down) * 6.4;
+      let nz = 1;
+      const inverseLength = 1 / Math.hypot(nx, ny, nz);
+      nx *= inverseLength;
+      ny *= inverseLength;
+      nz *= inverseLength;
+      const offset = (y * size + x) * 4;
+      image.data[offset] = Math.round((nx * 0.5 + 0.5) * 255);
+      image.data[offset + 1] = Math.round((ny * 0.5 + 0.5) * 255);
+      image.data[offset + 2] = Math.round((nz * 0.5 + 0.5) * 255);
+      image.data[offset + 3] = 255;
+    }
+  }
+  context.putImageData(image, 0, 0);
+  const normalMap = new THREE.CanvasTexture(canvas);
+  normalMap.wrapS = THREE.ClampToEdgeWrapping;
+  normalMap.wrapT = THREE.ClampToEdgeWrapping;
+  normalMap.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  const maskCanvas = document.createElement("canvas");
+  maskCanvas.width = size;
+  maskCanvas.height = size;
+  const maskContext = maskCanvas.getContext("2d");
+  const maskImage = maskContext.createImageData(size, size);
+  for (let index = 0; index < creaseMask.length; index += 1) {
+    const value = Math.round(creaseMask[index] * 255);
+    const offset = index * 4;
+    maskImage.data[offset] = value;
+    maskImage.data[offset + 1] = value;
+    maskImage.data[offset + 2] = value;
+    maskImage.data[offset + 3] = 255;
+  }
+  maskContext.putImageData(maskImage, 0, 0);
+  const shadeMap = new THREE.CanvasTexture(maskCanvas);
+  shadeMap.wrapS = THREE.ClampToEdgeWrapping;
+  shadeMap.wrapT = THREE.ClampToEdgeWrapping;
+  shadeMap.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  return { normalMap, shadeMap };
+}
+
+const creaseMaps = createCreaseNormalMap();
+
 // Use the supplied image directly. No white wash, transparency, desaturation,
 // contrast reduction, crop, or redraw is applied to the final sheet.
 const material = new THREE.MeshStandardMaterial({
   map: texture,
+  normalMap: creaseMaps.normalMap,
+  normalScale: new THREE.Vector2(0.68, 0.68),
   color: 0xffffff,
-  roughness: 0.86,
+  roughness: 0.76,
   metalness: 0,
   side: THREE.DoubleSide,
   // Face normals are intentionally not averaged. Every triangle therefore
   // reads as a rigid paper plane while remaining part of this one mesh.
   flatShading: true
 });
+// The supplied image is printed on the front only. A warm, faint show-through
+// on back-facing folds prevents the texture from looking shrink-wrapped.
+material.onBeforeCompile = (shader) => {
+  shader.uniforms.creaseShadeMap = { value: creaseMaps.shadeMap };
+  shader.fragmentShader = shader.fragmentShader.replace(
+    "uniform vec3 diffuse;",
+    "uniform vec3 diffuse;\nuniform sampler2D creaseShadeMap;"
+  );
+  shader.fragmentShader = shader.fragmentShader.replace(
+    "#include <map_fragment>",
+    `#include <map_fragment>\nfloat creaseShade = texture2D(creaseShadeMap, vMapUv).r;\ndiffuseColor.rgb *= mix(1.0, 0.84, creaseShade);\nif (!gl_FrontFacing) {\n  diffuseColor.rgb = mix(vec3(0.925, 0.905, 0.84), diffuseColor.rgb, 0.045);\n}`
+  );
+};
+material.customProgramCacheKey = () => "paper-front-print-back-fiber-v2";
 
 const paper = new THREE.Mesh(geometry, material);
 scene.add(paper);
