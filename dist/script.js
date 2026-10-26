@@ -15,27 +15,39 @@ renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.NoToneMapping;
 canvasWrap.appendChild(renderer.domElement);
 
-scene.add(new THREE.AmbientLight(0xffffff, 1.45));
-const keyLight = new THREE.DirectionalLight(0xfff2d5, 2.8);
+scene.add(new THREE.AmbientLight(0xffffff, 1.08));
+const keyLight = new THREE.DirectionalLight(0xfff2d5, 3.05);
 keyLight.position.set(-4.2, 5.2, 7.5);
 scene.add(keyLight);
-const sideLight = new THREE.DirectionalLight(0xaec7d8, 1.12);
+const sideLight = new THREE.DirectionalLight(0xaec7d8, 0.9);
 sideLight.position.set(4.8, -1.5, 5.2);
 scene.add(sideLight);
 const edgeLight = new THREE.DirectionalLight(0xffffff, 0.72);
 edgeLight.position.set(0.5, 1.2, -5);
 scene.add(edgeLight);
 
-// A dense, continuous sheet. The early crumpled state is supplied by the
-// approved photograph; this mesh takes over only once the outer folds begin
-// to release, so its job is to preserve a continuous paper surface.
+// One indexed sheet: every triangular panel shares vertices with its
+// neighbours. A deliberately moderate tessellation keeps the folded planes
+// broad and angular instead of smoothing the ball into a cloth-like surface.
 const PAPER_WIDTH = 3.18;
 const PAPER_HEIGHT = 4.24;
-const geometry = new THREE.PlaneGeometry(PAPER_WIDTH, PAPER_HEIGHT, 42, 56);
+const WIDTH_SEGMENTS = 18;
+const HEIGHT_SEGMENTS = 24;
+const geometry = new THREE.PlaneGeometry(
+  PAPER_WIDTH,
+  PAPER_HEIGHT,
+  WIDTH_SEGMENTS,
+  HEIGHT_SEGMENTS
+);
 const position = geometry.attributes.position;
 const vertexCount = position.count;
 const opened = new Float32Array(vertexCount * 3);
 const crumpled = new Float32Array(vertexCount * 3);
+
+function hashNoise(x, y) {
+  const value = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
+  return (value - Math.floor(value)) * 2 - 1;
+}
 
 function triangleWave(value) {
   const wrapped = ((value % 2) + 2) % 2;
@@ -59,8 +71,16 @@ function openedRelief(x, y) {
 }
 
 for (let index = 0; index < vertexCount; index += 1) {
-  const x = position.getX(index);
-  const y = position.getY(index);
+  const column = index % (WIDTH_SEGMENTS + 1);
+  const row = Math.floor(index / (WIDTH_SEGMENTS + 1));
+  const onEdge = column === 0 || column === WIDTH_SEGMENTS
+    || row === 0 || row === HEIGHT_SEGMENTS;
+  // Break the regular diagonal rhythm without separating a single vertex.
+  // The outside contour remains an exact rectangle when fully unfolded.
+  const jitterX = onEdge ? 0 : hashNoise(column, row) * 0.032;
+  const jitterY = onEdge ? 0 : hashNoise(row + 19, column + 7) * 0.032;
+  const x = position.getX(index) + jitterX;
+  const y = position.getY(index) + jitterY;
   const u = x / (PAPER_WIDTH / 2);
   const v = y / (PAPER_HEIGHT / 2);
   const i3 = index * 3;
@@ -97,10 +117,12 @@ texture.wrapT = THREE.ClampToEdgeWrapping;
 const material = new THREE.MeshStandardMaterial({
   map: texture,
   color: 0xffffff,
-  roughness: 0.94,
+  roughness: 0.86,
   metalness: 0,
   side: THREE.DoubleSide,
-  flatShading: false
+  // Face normals are intentionally not averaged. Every triangle therefore
+  // reads as a rigid paper plane while remaining part of this one mesh.
+  flatShading: true
 });
 
 const paper = new THREE.Mesh(geometry, material);
