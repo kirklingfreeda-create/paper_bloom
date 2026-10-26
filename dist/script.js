@@ -106,14 +106,14 @@ function redrawPaperTexture() {
     ctx.beginPath();
     ctx.moveTo(...points[0]);
     ctx.quadraticCurveTo(...points[1], ...points[2]);
-    ctx.globalAlpha = 0.085;
+    ctx.globalAlpha = 0.16;
     ctx.strokeStyle = "#344650";
-    ctx.lineWidth = 5;
+    ctx.lineWidth = 7;
     ctx.stroke();
     ctx.translate(2.5, 2.5);
-    ctx.globalAlpha = 0.14;
+    ctx.globalAlpha = 0.20;
     ctx.strokeStyle = "#fffdf4";
-    ctx.lineWidth = 3.5;
+    ctx.lineWidth = 4.2;
     ctx.stroke();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
   }
@@ -133,7 +133,7 @@ redrawPaperTexture();
 const material = new THREE.MeshPhysicalMaterial({
   color: 0xfffdf8, map: paperTexture, bumpMap: makePaperGrain(), bumpScale: 0.085,
   roughness: 0.94, metalness: 0, clearcoat: 0, sheen: 0.12, sheenRoughness: 0.9,
-  side: THREE.DoubleSide, flatShading: true,
+  side: THREE.DoubleSide, flatShading: true, vertexColors: true,
 });
 
 new THREE.TextureLoader().load("./assets/paper-pattern.png", texture => {
@@ -153,7 +153,8 @@ async function loadTypedArray(url, Type) {
   return new Type(await response.arrayBuffer());
 }
 
-let paper = null, geometry = null, cache = null, position = null, metadata = null;
+let paper = null, geometry = null, cache = null, position = null, colors = null, metadata = null;
+let neighbors = null;
 let progress = 0, target = 0, velocity = 0;
 let pointerX = 0, pointerY = 0, previousTime = performance.now(), paperFaceted = true;
 
@@ -170,7 +171,16 @@ async function preparePaper() {
   geometry = new THREE.BufferGeometry();
   geometry.setAttribute("position", position);
   geometry.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
+  colors = new THREE.BufferAttribute(new Float32Array(metadata.vertices * 3).fill(1), 3);
+  geometry.setAttribute("color", colors);
   geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+  neighbors = Array.from({ length: metadata.vertices }, () => new Set());
+  for (let i = 0; i < indices.length; i += 3) {
+    const a = indices[i], b = indices[i + 1], c = indices[i + 2];
+    neighbors[a].add(b); neighbors[a].add(c);
+    neighbors[b].add(a); neighbors[b].add(c);
+    neighbors[c].add(a); neighbors[c].add(b);
+  }
   paper = new THREE.Mesh(geometry, material);
   scene.add(paper);
   updateGeometry(0, true);
@@ -192,6 +202,23 @@ function updateGeometry(amount, force = false) {
   for (let i = 0; i < stride; i += 1) output[i] = cache[startA + i] * (1 - mix) + cache[startB + i] * mix;
   position.needsUpdate = true;
   geometry.computeVertexNormals();
+  // Concave vertices receive a soft baked occlusion term.  Unlike a painted
+  // triangle pattern this follows the actual moving surface and remains as a
+  // restrained crease shadow after the sheet has opened.
+  const shade = colors.array;
+  for (let vertex = 0; vertex < metadata.vertices; vertex += 1) {
+    let neighborZ = 0;
+    for (const other of neighbors[vertex]) neighborZ += output[other * 3 + 2];
+    neighborZ /= Math.max(neighbors[vertex].size, 1);
+    const z = output[vertex * 3 + 2];
+    const valley = Math.max(0, neighborZ - z);
+    const ridge = Math.max(0, z - neighborZ);
+    const value = THREE.MathUtils.clamp(1 - valley * 2.25 + ridge * 0.22, 0.62, 1.04);
+    shade[vertex * 3] = value * 0.98;
+    shade[vertex * 3 + 1] = value * 0.995;
+    shade[vertex * 3 + 2] = value;
+  }
+  colors.needsUpdate = true;
 
   const shouldBeFaceted = amount < 0.72;
   if (force || shouldBeFaceted !== paperFaceted) {
