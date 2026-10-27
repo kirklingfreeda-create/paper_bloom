@@ -13,11 +13,11 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 canvasWrap.appendChild(renderer.domElement);
 
-scene.add(new THREE.HemisphereLight(0xfffcf4, 0x6f7e88, 0.82));
-const keyLight = new THREE.DirectionalLight(0xfff8e7, 2.05);
+scene.add(new THREE.HemisphereLight(0xfffcf4, 0x5f707b, 0.64));
+const keyLight = new THREE.DirectionalLight(0xfff8e7, 1.88);
 keyLight.position.set(-3.7, 4.8, 7.4);
 scene.add(keyLight);
-const rimLight = new THREE.DirectionalLight(0xc7d9df, 0.92);
+const rimLight = new THREE.DirectionalLight(0xc7d9df, 0.74);
 rimLight.position.set(4.2, -2.2, 5.2);
 scene.add(rimLight);
 
@@ -194,7 +194,8 @@ function smootherstep(value) {
 
 function updateGeometry(amount, force = false) {
   if (!paper || !cache) return;
-  const frame = smootherstep(amount) * (metadata.frames - 1);
+  const eased = smootherstep(amount);
+  const frame = eased * (metadata.frames - 1);
   const a = Math.min(Math.floor(frame), metadata.frames - 1);
   const b = Math.min(a + 1, metadata.frames - 1);
   const mix = frame - a, stride = metadata.vertices * 3;
@@ -213,7 +214,8 @@ function updateGeometry(amount, force = false) {
     const z = output[vertex * 3 + 2];
     const valley = Math.max(0, neighborZ - z);
     const ridge = Math.max(0, z - neighborZ);
-    const value = THREE.MathUtils.clamp(1 - valley * 2.25 + ridge * 0.22, 0.62, 1.04);
+    const valleyStrength = THREE.MathUtils.lerp(5.0, 2.8, eased);
+    const value = THREE.MathUtils.clamp(1 - valley * valleyStrength + ridge * 0.12, 0.50, 1.02);
     shade[vertex * 3] = value * 0.98;
     shade[vertex * 3 + 1] = value * 0.995;
     shade[vertex * 3 + 2] = value;
@@ -226,9 +228,8 @@ function updateGeometry(amount, force = false) {
     material.flatShading = paperFaceted;
     material.needsUpdate = true;
   }
-  const eased = smootherstep(amount);
-  paper.rotation.x = THREE.MathUtils.lerp(0.02, pointerY * 0.025, eased);
-  paper.rotation.y = THREE.MathUtils.lerp(-0.08, pointerX * 0.045, eased);
+  paper.rotation.x = THREE.MathUtils.lerp(-0.12, pointerY * 0.025, eased);
+  paper.rotation.y = THREE.MathUtils.lerp(0.48, pointerX * 0.045, eased);
   paper.rotation.z = THREE.MathUtils.lerp(-0.14, -0.015, eased);
   paper.scale.setScalar(THREE.MathUtils.lerp(1.34, 1, eased));
 }
@@ -251,8 +252,11 @@ function animate(now) {
     if (Math.abs(target - progress) < 0.00035 && Math.abs(velocity) < 0.002) { progress = target; velocity = 0; }
   }
   updateGeometry(THREE.MathUtils.clamp(progress, 0, 1));
+  const lightOpen = smootherstep(THREE.MathUtils.clamp(progress, 0, 1));
   keyLight.position.x = -3.7 + pointerX * 1.2;
   keyLight.position.y = 4.8 - pointerY * 0.8;
+  keyLight.position.z = THREE.MathUtils.lerp(3.0, 7.4, lightOpen);
+  keyLight.intensity = THREE.MathUtils.lerp(1.62, 1.88, lightOpen);
   renderer.render(scene, camera);
   requestAnimationFrame(animate);
 }
