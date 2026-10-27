@@ -154,6 +154,7 @@ async function loadTypedArray(url, Type) {
 }
 
 let paper = null, geometry = null, cache = null, position = null, colors = null, metadata = null;
+let tipCorrection = null;
 let neighbors = null;
 let progress = 0, target = 0, velocity = 0;
 let pointerX = 0, pointerY = 0, previousTime = performance.now(), paperFaceted = true;
@@ -167,6 +168,7 @@ async function preparePaper() {
     loadTypedArray("./assets/paper-cache/paper-uv.bin", Float32Array),
   ]);
   cache = frames;
+  tipCorrection = buildTipCorrection(frames);
   position = new THREE.BufferAttribute(new Float32Array(metadata.vertices * 3), 3);
   geometry = new THREE.BufferGeometry();
   geometry.setAttribute("position", position);
@@ -192,6 +194,39 @@ function smootherstep(value) {
   return t * t * t * (t * (t * 6 - 15) + 10);
 }
 
+function buildTipCorrection(frames) {
+  const correction = new Float32Array(metadata.vertices * 3);
+  const rotation = new THREE.Matrix4().makeRotationFromEuler(
+    new THREE.Euler(-0.08, 0.30, -0.14, "XYZ"),
+  );
+  const inverseRotation = rotation.clone().invert();
+  const local = new THREE.Vector3();
+  const displayed = new THREE.Vector3();
+  const tucked = new THREE.Vector3();
+
+  for (let vertex = 0; vertex < metadata.vertices; vertex += 1) {
+    const offset = vertex * 3;
+    local.set(frames[offset], frames[offset + 1], frames[offset + 2]);
+    displayed.copy(local).applyMatrix4(rotation);
+
+    // Tuck only the narrow lower-right flap seen in the initial presentation
+    // angle. Two smooth masks keep the surrounding silhouette untouched.
+    const vertical = smootherstep((-0.56 - displayed.y) / 0.30);
+    const horizontal = smootherstep((displayed.x + 0.03) / 0.18);
+    const strength = vertical * horizontal * 0.68;
+    if (strength <= 0) continue;
+
+    tucked.copy(displayed);
+    tucked.x = THREE.MathUtils.lerp(displayed.x, 0.06, strength * 0.62);
+    tucked.y = THREE.MathUtils.lerp(displayed.y, -0.54, strength);
+    tucked.applyMatrix4(inverseRotation).sub(local);
+    correction[offset] = tucked.x;
+    correction[offset + 1] = tucked.y;
+    correction[offset + 2] = tucked.z;
+  }
+  return correction;
+}
+
 function updateGeometry(amount, force = false) {
   if (!paper || !cache) return;
   const eased = smootherstep(amount);
@@ -201,6 +236,10 @@ function updateGeometry(amount, force = false) {
   const mix = frame - a, stride = metadata.vertices * 3;
   const output = position.array, startA = a * stride, startB = b * stride;
   for (let i = 0; i < stride; i += 1) output[i] = cache[startA + i] * (1 - mix) + cache[startB + i] * mix;
+  const tipFade = 1 - smootherstep(amount / 0.32);
+  if (tipCorrection && tipFade > 0) {
+    for (let i = 0; i < stride; i += 1) output[i] += tipCorrection[i] * tipFade;
+  }
   position.needsUpdate = true;
   geometry.computeVertexNormals();
   // Concave vertices receive a soft baked occlusion term.  Unlike a painted
