@@ -270,7 +270,7 @@ function updateGeometry(amount, force = false) {
   paper.rotation.x = THREE.MathUtils.lerp(-0.08, pointerY * 0.025, eased);
   paper.rotation.y = THREE.MathUtils.lerp(0.30, pointerX * 0.045, eased);
   paper.rotation.z = THREE.MathUtils.lerp(-0.14, -0.015, eased);
-  paper.scale.setScalar(THREE.MathUtils.lerp(1.34, 1, eased));
+  paper.scale.setScalar(THREE.MathUtils.lerp(1.16, 1, eased));
 }
 
 function resize() {
