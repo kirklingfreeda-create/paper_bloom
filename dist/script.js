@@ -255,9 +255,14 @@ function updateGeometry(amount, force = false) {
     const ridge = Math.max(0, z - neighborZ);
     const valleyStrength = THREE.MathUtils.lerp(5.0, 2.8, eased);
     const value = THREE.MathUtils.clamp(1 - valley * valleyStrength + ridge * 0.12, 0.50, 1.02);
-    shade[vertex * 3] = value * 0.98;
-    shade[vertex * 3 + 1] = value * 0.995;
-    shade[vertex * 3 + 2] = value;
+    const facetId = Math.floor(vertex / 3);
+    const facetNoise = Math.sin((facetId + 1) * 12.9898) * 43758.5453;
+    const facetRandom = facetNoise - Math.floor(facetNoise);
+    const facetTone = metadata.microfacets ? 0.93 + facetRandom * 0.11 : 1;
+    const tone = value * THREE.MathUtils.lerp(facetTone, 1, smootherstep(amount / 0.72));
+    shade[vertex * 3] = tone * 0.98;
+    shade[vertex * 3 + 1] = tone * 0.995;
+    shade[vertex * 3 + 2] = tone;
   }
   colors.needsUpdate = true;
 
@@ -270,7 +275,7 @@ function updateGeometry(amount, force = false) {
   paper.rotation.x = THREE.MathUtils.lerp(-0.08, pointerY * 0.025, eased);
   paper.rotation.y = THREE.MathUtils.lerp(0.30, pointerX * 0.045, eased);
   paper.rotation.z = THREE.MathUtils.lerp(-0.14, -0.015, eased);
-  paper.scale.setScalar(THREE.MathUtils.lerp(1.16, 1, eased));
+  paper.scale.setScalar(1);
 }
 
 function resize() {
