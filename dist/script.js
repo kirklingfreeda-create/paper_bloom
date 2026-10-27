@@ -228,8 +228,8 @@ function updateGeometry(amount, force = false) {
     material.flatShading = paperFaceted;
     material.needsUpdate = true;
   }
-  paper.rotation.x = THREE.MathUtils.lerp(-0.12, pointerY * 0.025, eased);
-  paper.rotation.y = THREE.MathUtils.lerp(0.48, pointerX * 0.045, eased);
+  paper.rotation.x = THREE.MathUtils.lerp(-0.08, pointerY * 0.025, eased);
+  paper.rotation.y = THREE.MathUtils.lerp(0.30, pointerX * 0.045, eased);
   paper.rotation.z = THREE.MathUtils.lerp(-0.14, -0.015, eased);
   paper.scale.setScalar(THREE.MathUtils.lerp(1.34, 1, eased));
 }
