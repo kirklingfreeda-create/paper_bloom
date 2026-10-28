@@ -241,6 +241,13 @@ function updateGeometry(amount, force = false) {
   const mix = frame - a, stride = metadata.vertices * 3;
   const output = position.array, startA = a * stride, startB = b * stride;
   for (let i = 0; i < stride; i += 1) output[i] = cache[startA + i] * (1 - mix) + cache[startB + i] * mix;
+  // Keep the object itself at a fixed scale. The compact size belongs to the
+  // folded geometry and is released while the sheet is still visibly folded,
+  // so there is no separate zoom after the paper has opened.
+  const foldCompression = THREE.MathUtils.lerp(0.60, 1, smootherstep(amount / 0.42));
+  for (let i = 0; i < stride; i += 3) {
+    output[i] *= foldCompression; output[i + 1] *= foldCompression; output[i + 2] *= foldCompression;
+  }
   const tipFade = 1 - smootherstep(amount / 0.32);
   if (tipCorrection && tipFade > 0) {
     for (let i = 0; i < stride; i += 1) output[i] += tipCorrection[i] * tipFade;
@@ -280,7 +287,7 @@ function updateGeometry(amount, force = false) {
   paper.rotation.x = THREE.MathUtils.lerp(-0.08, pointerY * 0.025, eased);
   paper.rotation.y = THREE.MathUtils.lerp(0.30, pointerX * 0.045, eased);
   paper.rotation.z = THREE.MathUtils.lerp(-0.14, -0.015, eased);
-  paper.scale.setScalar(THREE.MathUtils.lerp(0.60, 1, eased));
+  paper.scale.setScalar(1);
 }
 
 function resize() {
