@@ -169,7 +169,7 @@ async function preparePaper() {
     loadTypedArray("./assets/paper-cache/paper-uv.bin", Float32Array),
   ]);
   cache = frames;
-  tipCorrection = buildTipCorrection(frames, foldedFrame);
+  tipCorrection = null;
   position = new THREE.BufferAttribute(new Float32Array(metadata.vertices * 3), 3);
   geometry = new THREE.BufferGeometry();
   geometry.setAttribute("position", position);
@@ -280,7 +280,7 @@ function updateGeometry(amount, force = false) {
   paper.rotation.x = THREE.MathUtils.lerp(-0.08, pointerY * 0.025, eased);
   paper.rotation.y = THREE.MathUtils.lerp(0.30, pointerX * 0.045, eased);
   paper.rotation.z = THREE.MathUtils.lerp(-0.14, -0.015, eased);
-  paper.scale.setScalar(0.86);
+  paper.scale.setScalar(THREE.MathUtils.lerp(0.60, 1, eased));
 }
 
 function resize() {
