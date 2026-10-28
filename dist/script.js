@@ -44,28 +44,6 @@ function makePaperGrain() {
     context.quadraticCurveTo(x + length * 0.5, y + (random() - 0.5) * 5, x + length, y + (random() - 0.5) * 7);
     context.stroke();
   }
-  // Four broad, low-contrast pressure lines remain after the sheet opens.
-  const creasePaths = [
-    [[-20, 105], [170, 205], [535, 82]],
-    [[35, 420], [245, 292], [540, 365]],
-    [[258, -20], [222, 184], [330, 535]],
-    [[-10, 275], [142, 330], [310, 514]],
-  ];
-  context.globalAlpha = 0.28;
-  context.lineCap = "round";
-  for (const points of creasePaths) {
-    context.beginPath();
-    context.moveTo(...points[0]);
-    context.quadraticCurveTo(...points[1], ...points[2]);
-    context.strokeStyle = "#575757";
-    context.lineWidth = 3.2;
-    context.stroke();
-    context.translate(1.4, 1.4);
-    context.strokeStyle = "#d9d9d9";
-    context.lineWidth = 2.2;
-    context.stroke();
-    context.setTransform(1, 0, 0, 1, 0, 0);
-  }
   const texture = new THREE.CanvasTexture(canvas);
   texture.wrapS = texture.wrapT = THREE.ClampToEdgeWrapping;
   return texture;
@@ -93,31 +71,6 @@ function redrawPaperTexture() {
     ctx.drawImage(patternImage, 0, 0, textureCanvas.width, textureCanvas.height);
     ctx.restore();
   }
-  // Very faint paired strokes read as compressed paper fibres once opened;
-  // they stay subtle enough that the printed pattern remains the hero.
-  const printedCreases = [
-    [[-30, 205], [265, 410], [805, 175]],
-    [[-20, 825], [360, 565], [800, 735]],
-    [[395, -30], [320, 355], [505, 1055]],
-  ];
-  ctx.save();
-  ctx.lineCap = "round";
-  for (const points of printedCreases) {
-    ctx.beginPath();
-    ctx.moveTo(...points[0]);
-    ctx.quadraticCurveTo(...points[1], ...points[2]);
-    ctx.globalAlpha = 0.16;
-    ctx.strokeStyle = "#344650";
-    ctx.lineWidth = 7;
-    ctx.stroke();
-    ctx.translate(2.5, 2.5);
-    ctx.globalAlpha = 0.20;
-    ctx.strokeStyle = "#fffdf4";
-    ctx.lineWidth = 4.2;
-    ctx.stroke();
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-  }
-  ctx.restore();
   if (copy.title || copy.body) {
     ctx.fillStyle = "rgba(44,55,61,.82)";
     ctx.textAlign = "center";
@@ -155,7 +108,7 @@ async function loadTypedArray(url, Type) {
 
 let paper = null, geometry = null, cache = null, position = null, colors = null, metadata = null;
 let tipCorrection = null;
-let neighbors = null;
+let neighbors = null, normalGroups = null;
 let progress = 0, target = 0, velocity = 0;
 let pointerX = 0, pointerY = 0, previousTime = performance.now(), paperFaceted = true;
 const foldedFrame = 0;
@@ -177,6 +130,12 @@ async function preparePaper() {
   colors = new THREE.BufferAttribute(new Float32Array(metadata.vertices * 3).fill(1), 3);
   geometry.setAttribute("color", colors);
   geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+  normalGroups = new Map();
+  for (let vertex = 0; vertex < metadata.vertices; vertex += 1) {
+    const key = `${uv[vertex * 2].toFixed(6)},${uv[vertex * 2 + 1].toFixed(6)}`;
+    if (!normalGroups.has(key)) normalGroups.set(key, []);
+    normalGroups.get(key).push(vertex);
+  }
   neighbors = Array.from({ length: metadata.vertices }, () => new Set());
   for (let i = 0; i < indices.length; i += 3) {
     const a = indices[i], b = indices[i + 1], c = indices[i + 2];
@@ -247,6 +206,37 @@ function updateGeometry(amount, force = false) {
   }
   position.needsUpdate = true;
   geometry.computeVertexNormals();
+  // Folded paper keeps crisp facet normals. During opening, vertices that
+  // represent the same point on the original sheet gradually share a normal,
+  // so the hidden regular triangulation disappears without flattening the
+  // actual residual crease geometry.
+  const normalBlend = smootherstep((amount - 0.54) / 0.40);
+  if (normalBlend > 0 && normalGroups) {
+    const normalAttribute = geometry.getAttribute("normal");
+    const normals = normalAttribute.array;
+    for (const group of normalGroups.values()) {
+      if (group.length < 2) continue;
+      let nx = 0, ny = 0, nz = 0;
+      for (const vertex of group) {
+        nx += normals[vertex * 3];
+        ny += normals[vertex * 3 + 1];
+        nz += normals[vertex * 3 + 2];
+      }
+      const groupLength = Math.hypot(nx, ny, nz) || 1;
+      nx /= groupLength; ny /= groupLength; nz /= groupLength;
+      for (const vertex of group) {
+        const offset = vertex * 3;
+        const sx = THREE.MathUtils.lerp(normals[offset], nx, normalBlend);
+        const sy = THREE.MathUtils.lerp(normals[offset + 1], ny, normalBlend);
+        const sz = THREE.MathUtils.lerp(normals[offset + 2], nz, normalBlend);
+        const length = Math.hypot(sx, sy, sz) || 1;
+        normals[offset] = sx / length;
+        normals[offset + 1] = sy / length;
+        normals[offset + 2] = sz / length;
+      }
+    }
+    normalAttribute.needsUpdate = true;
+  }
   // Concave vertices receive a soft baked occlusion term.  Unlike a painted
   // triangle pattern this follows the actual moving surface and remains as a
   // restrained crease shadow after the sheet has opened.
@@ -258,8 +248,11 @@ function updateGeometry(amount, force = false) {
     const z = output[vertex * 3 + 2];
     const valley = Math.max(0, neighborZ - z);
     const ridge = Math.max(0, z - neighborZ);
-    const valleyStrength = THREE.MathUtils.lerp(5.0, 2.8, eased);
-    const value = THREE.MathUtils.clamp(1 - valley * valleyStrength + ridge * 0.12, 0.50, 1.02);
+    // The compact state keeps deep local occlusion; as the sheet opens, real
+    // geometric relief remains while the artificial per-vertex contrast fades.
+    const valleyStrength = THREE.MathUtils.lerp(5.0, 0.55, eased);
+    const ridgeBoost = THREE.MathUtils.lerp(0.12, 0.025, eased);
+    const value = THREE.MathUtils.clamp(1 - valley * valleyStrength + ridge * ridgeBoost, 0.68, 1.02);
     const facetId = Math.floor(vertex / 3);
     const facetNoise = Math.sin((facetId + 1) * 12.9898) * 43758.5453;
     const facetRandom = facetNoise - Math.floor(facetNoise);
