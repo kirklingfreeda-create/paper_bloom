@@ -158,6 +158,7 @@ let tipCorrection = null;
 let neighbors = null;
 let progress = 0, target = 0, velocity = 0;
 let pointerX = 0, pointerY = 0, previousTime = performance.now(), paperFaceted = true;
+const foldedFrame = 10;
 
 async function preparePaper() {
   const metaResponse = await fetch("./assets/paper-cache/paper-cache.json");
@@ -168,7 +169,7 @@ async function preparePaper() {
     loadTypedArray("./assets/paper-cache/paper-uv.bin", Float32Array),
   ]);
   cache = frames;
-  tipCorrection = buildTipCorrection(frames);
+  tipCorrection = buildTipCorrection(frames, foldedFrame);
   position = new THREE.BufferAttribute(new Float32Array(metadata.vertices * 3), 3);
   geometry = new THREE.BufferGeometry();
   geometry.setAttribute("position", position);
@@ -194,8 +195,9 @@ function smootherstep(value) {
   return t * t * t * (t * (t * 6 - 15) + 10);
 }
 
-function buildTipCorrection(frames) {
+function buildTipCorrection(frames, frameIndex = 0) {
   const correction = new Float32Array(metadata.vertices * 3);
+  const frameOffset = frameIndex * metadata.vertices * 3;
   const rotation = new THREE.Matrix4().makeRotationFromEuler(
     new THREE.Euler(-0.08, 0.30, -0.14, "XYZ"),
   );
@@ -206,7 +208,7 @@ function buildTipCorrection(frames) {
 
   for (let vertex = 0; vertex < metadata.vertices; vertex += 1) {
     const offset = vertex * 3;
-    local.set(frames[offset], frames[offset + 1], frames[offset + 2]);
+    local.set(frames[frameOffset + offset], frames[frameOffset + offset + 1], frames[frameOffset + offset + 2]);
     displayed.copy(local).applyMatrix4(rotation);
 
     // Tuck only the narrow lower-right flap seen in the initial presentation
@@ -230,7 +232,10 @@ function buildTipCorrection(frames) {
 function updateGeometry(amount, force = false) {
   if (!paper || !cache) return;
   const eased = smootherstep(amount);
-  const frame = eased * (metadata.frames - 1);
+  // The first ten cache frames are a secondary inward squeeze after the paper
+  // has already reached its intended ball silhouette. Start playback at that
+  // silhouette so crumpling stops there instead of continuing to collapse.
+  const frame = foldedFrame + eased * (metadata.frames - 1 - foldedFrame);
   const a = Math.min(Math.floor(frame), metadata.frames - 1);
   const b = Math.min(a + 1, metadata.frames - 1);
   const mix = frame - a, stride = metadata.vertices * 3;
@@ -275,7 +280,7 @@ function updateGeometry(amount, force = false) {
   paper.rotation.x = THREE.MathUtils.lerp(-0.08, pointerY * 0.025, eased);
   paper.rotation.y = THREE.MathUtils.lerp(0.30, pointerX * 0.045, eased);
   paper.rotation.z = THREE.MathUtils.lerp(-0.14, -0.015, eased);
-  paper.scale.setScalar(1);
+  paper.scale.setScalar(0.86);
 }
 
 function resize() {
