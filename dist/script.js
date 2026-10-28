@@ -158,7 +158,7 @@ let tipCorrection = null;
 let neighbors = null;
 let progress = 0, target = 0, velocity = 0;
 let pointerX = 0, pointerY = 0, previousTime = performance.now(), paperFaceted = true;
-const foldedFrame = 10;
+const foldedFrame = 0;
 
 async function preparePaper() {
   const metaResponse = await fetch("./assets/paper-cache/paper-cache.json");
@@ -232,22 +232,14 @@ function buildTipCorrection(frames, frameIndex = 0) {
 function updateGeometry(amount, force = false) {
   if (!paper || !cache) return;
   const eased = smootherstep(amount);
-  // The first ten cache frames are a secondary inward squeeze after the paper
-  // has already reached its intended ball silhouette. Start playback at that
-  // silhouette so crumpling stops there instead of continuing to collapse.
+  // Use the full physical cache: the size ratio comes from overlapping folds,
+  // never from state-dependent whole-object scaling.
   const frame = foldedFrame + eased * (metadata.frames - 1 - foldedFrame);
   const a = Math.min(Math.floor(frame), metadata.frames - 1);
   const b = Math.min(a + 1, metadata.frames - 1);
   const mix = frame - a, stride = metadata.vertices * 3;
   const output = position.array, startA = a * stride, startB = b * stride;
   for (let i = 0; i < stride; i += 1) output[i] = cache[startA + i] * (1 - mix) + cache[startB + i] * mix;
-  // Keep the object itself at a fixed scale. The compact size belongs to the
-  // folded geometry and is released while the sheet is still visibly folded,
-  // so there is no separate zoom after the paper has opened.
-  const foldCompression = THREE.MathUtils.lerp(0.60, 1, smootherstep(amount / 0.42));
-  for (let i = 0; i < stride; i += 3) {
-    output[i] *= foldCompression; output[i + 1] *= foldCompression; output[i + 2] *= foldCompression;
-  }
   const tipFade = 1 - smootherstep(amount / 0.32);
   if (tipCorrection && tipFade > 0) {
     for (let i = 0; i < stride; i += 1) output[i] += tipCorrection[i] * tipFade;
