@@ -108,7 +108,7 @@ async function loadTypedArray(url, Type) {
 
 let paper = null, geometry = null, cache = null, position = null, colors = null, metadata = null;
 let tipCorrection = null;
-let neighbors = null, normalGroups = null;
+let neighbors = null, normalGroups = null, visualGroups = null, facetNormalGroups = null;
 let progress = 0, target = 0, velocity = 0;
 let pointerX = 0, pointerY = 0, previousTime = performance.now(), paperFaceted = true;
 const foldedFrame = 0;
@@ -116,12 +116,16 @@ const foldedFrame = 0;
 async function preparePaper() {
   const metaResponse = await fetch("./assets/paper-cache/paper-cache.json");
   metadata = await metaResponse.json();
-  const [frames, indices, uv] = await Promise.all([
+  const [frames, indices, uv, groups] = await Promise.all([
     loadTypedArray("./assets/paper-cache/paper-frames.bin", Float32Array),
     loadTypedArray("./assets/paper-cache/paper-index.bin", Uint16Array),
     loadTypedArray("./assets/paper-cache/paper-uv.bin", Float32Array),
+    metadata.varied_facets
+      ? loadTypedArray("./assets/paper-cache/paper-groups.bin", Uint16Array)
+      : Promise.resolve(null),
   ]);
   cache = frames;
+  visualGroups = groups;
   tipCorrection = null;
   position = new THREE.BufferAttribute(new Float32Array(metadata.vertices * 3), 3);
   geometry = new THREE.BufferGeometry();
@@ -131,10 +135,16 @@ async function preparePaper() {
   geometry.setAttribute("color", colors);
   geometry.setIndex(new THREE.BufferAttribute(indices, 1));
   normalGroups = new Map();
+  facetNormalGroups = new Map();
   for (let vertex = 0; vertex < metadata.vertices; vertex += 1) {
     const key = `${uv[vertex * 2].toFixed(6)},${uv[vertex * 2 + 1].toFixed(6)}`;
     if (!normalGroups.has(key)) normalGroups.set(key, []);
     normalGroups.get(key).push(vertex);
+    if (visualGroups) {
+      const group = visualGroups[vertex];
+      if (!facetNormalGroups.has(group)) facetNormalGroups.set(group, []);
+      facetNormalGroups.get(group).push(vertex);
+    }
   }
   neighbors = Array.from({ length: metadata.vertices }, () => new Set());
   for (let i = 0; i < indices.length; i += 3) {
@@ -206,6 +216,33 @@ function updateGeometry(amount, force = false) {
   }
   position.needsUpdate = true;
   geometry.computeVertexNormals();
+  const facetMerge = 1 - smootherstep((amount - 0.30) / 0.38);
+  if (facetMerge > 0 && facetNormalGroups) {
+    const normalAttribute = geometry.getAttribute("normal");
+    const normals = normalAttribute.array;
+    for (const group of facetNormalGroups.values()) {
+      if (group.length < 4) continue;
+      let nx = 0, ny = 0, nz = 0;
+      for (const vertex of group) {
+        nx += normals[vertex * 3];
+        ny += normals[vertex * 3 + 1];
+        nz += normals[vertex * 3 + 2];
+      }
+      const groupLength = Math.hypot(nx, ny, nz) || 1;
+      nx /= groupLength; ny /= groupLength; nz /= groupLength;
+      for (const vertex of group) {
+        const offset = vertex * 3;
+        const sx = THREE.MathUtils.lerp(normals[offset], nx, facetMerge);
+        const sy = THREE.MathUtils.lerp(normals[offset + 1], ny, facetMerge);
+        const sz = THREE.MathUtils.lerp(normals[offset + 2], nz, facetMerge);
+        const length = Math.hypot(sx, sy, sz) || 1;
+        normals[offset] = sx / length;
+        normals[offset + 1] = sy / length;
+        normals[offset + 2] = sz / length;
+      }
+    }
+    normalAttribute.needsUpdate = true;
+  }
   // Folded paper keeps crisp facet normals. During opening, vertices that
   // represent the same point on the original sheet gradually share a normal,
   // so the hidden regular triangulation disappears without flattening the
@@ -253,7 +290,7 @@ function updateGeometry(amount, force = false) {
     const valleyStrength = THREE.MathUtils.lerp(5.0, 0.55, eased);
     const ridgeBoost = THREE.MathUtils.lerp(0.12, 0.025, eased);
     const value = THREE.MathUtils.clamp(1 - valley * valleyStrength + ridge * ridgeBoost, 0.68, 1.02);
-    const facetId = Math.floor(vertex / 3);
+    const facetId = visualGroups ? visualGroups[vertex] : Math.floor(vertex / 3);
     const facetNoise = Math.sin((facetId + 1) * 12.9898) * 43758.5453;
     const facetRandom = facetNoise - Math.floor(facetNoise);
     const facetTone = metadata.microfacets ? 0.93 + facetRandom * 0.11 : 1;
@@ -264,7 +301,9 @@ function updateGeometry(amount, force = false) {
   }
   colors.needsUpdate = true;
 
-  const shouldBeFaceted = amount < 0.72;
+  // Varied-facet caches already carry explicit flat and merged polygon
+  // normals. Shader-level flat shading would reveal every hidden diagonal.
+  const shouldBeFaceted = !metadata.varied_facets && amount < 0.72;
   if (force || shouldBeFaceted !== paperFaceted) {
     paperFaceted = shouldBeFaceted;
     material.flatShading = paperFaceted;
