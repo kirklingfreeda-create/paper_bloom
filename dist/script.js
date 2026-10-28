@@ -232,9 +232,10 @@ function buildTipCorrection(frames, frameIndex = 0) {
 function updateGeometry(amount, force = false) {
   if (!paper || !cache) return;
   const eased = smootherstep(amount);
-  // Use the full physical cache: the size ratio comes from overlapping folds,
-  // never from state-dependent whole-object scaling.
-  const frame = foldedFrame + eased * (metadata.frames - 1 - foldedFrame);
+  // Complete the physical compaction before the interaction settles. The
+  // final 16% holds frame zero, so no centre fold happens at the very end.
+  const foldPlayback = smootherstep(THREE.MathUtils.clamp((amount - 0.16) / 0.84, 0, 1));
+  const frame = foldedFrame + foldPlayback * (metadata.frames - 1 - foldedFrame);
   const a = Math.min(Math.floor(frame), metadata.frames - 1);
   const b = Math.min(a + 1, metadata.frames - 1);
   const mix = frame - a, stride = metadata.vertices * 3;
