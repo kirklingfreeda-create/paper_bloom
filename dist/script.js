@@ -216,19 +216,36 @@ function updateGeometry(amount, force = false) {
   }
   position.needsUpdate = true;
   geometry.computeVertexNormals();
-  const facetMerge = 1 - smootherstep((amount - 0.30) / 0.38);
+  // Polygon merging is a presentation aid for the compact ball only. It must
+  // be gone before broad layers separate during the unfold.
+  const facetMerge = 1 - smootherstep(amount / 0.42);
   if (facetMerge > 0 && facetNormalGroups) {
     const normalAttribute = geometry.getAttribute("normal");
     const normals = normalAttribute.array;
     for (const group of facetNormalGroups.values()) {
       if (group.length < 4) continue;
+      const reference = group[0] * 3;
+      const rx = normals[reference];
+      const ry = normals[reference + 1];
+      const rz = normals[reference + 2];
+      let compatible = true;
       let nx = 0, ny = 0, nz = 0;
       for (const vertex of group) {
-        nx += normals[vertex * 3];
-        ny += normals[vertex * 3 + 1];
-        nz += normals[vertex * 3 + 2];
+        const offset = vertex * 3;
+        const vx = normals[offset];
+        const vy = normals[offset + 1];
+        const vz = normals[offset + 2];
+        // Never merge a sharp fold, back-facing layer, or temporarily
+        // inverted face. Those are real paper boundaries, not polygons.
+        if (rx * vx + ry * vy + rz * vz < 0.78) {
+          compatible = false;
+          break;
+        }
+        nx += vx; ny += vy; nz += vz;
       }
-      const groupLength = Math.hypot(nx, ny, nz) || 1;
+      if (!compatible) continue;
+      const groupLength = Math.hypot(nx, ny, nz);
+      if (groupLength < group.length * 0.62) continue;
       nx /= groupLength; ny /= groupLength; nz /= groupLength;
       for (const vertex of group) {
         const offset = vertex * 3;
@@ -247,7 +264,7 @@ function updateGeometry(amount, force = false) {
   // represent the same point on the original sheet gradually share a normal,
   // so the hidden regular triangulation disappears without flattening the
   // actual residual crease geometry.
-  const normalBlend = smootherstep((amount - 0.54) / 0.40);
+  const normalBlend = smootherstep((amount - 0.22) / 0.38);
   if (normalBlend > 0 && normalGroups) {
     const normalAttribute = geometry.getAttribute("normal");
     const normals = normalAttribute.array;
@@ -289,7 +306,9 @@ function updateGeometry(amount, force = false) {
     // geometric relief remains while the artificial per-vertex contrast fades.
     const valleyStrength = THREE.MathUtils.lerp(5.0, 0.55, eased);
     const ridgeBoost = THREE.MathUtils.lerp(0.12, 0.025, eased);
-    const value = THREE.MathUtils.clamp(1 - valley * valleyStrength + ridge * ridgeBoost, 0.68, 1.02);
+    const value = metadata.varied_facets
+      ? 1
+      : THREE.MathUtils.clamp(1 - valley * valleyStrength + ridge * ridgeBoost, 0.68, 1.02);
     const facetId = visualGroups ? visualGroups[vertex] : Math.floor(vertex / 3);
     const facetNoise = Math.sin((facetId + 1) * 12.9898) * 43758.5453;
     const facetRandom = facetNoise - Math.floor(facetNoise);
