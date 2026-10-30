@@ -109,9 +109,11 @@ async function loadTypedArray(url, Type) {
 let paper = null, geometry = null, cache = null, position = null, colors = null, metadata = null;
 let tipCorrection = null;
 let neighbors = null, normalGroups = null, visualGroups = null, facetNormalGroups = null;
+let frameDistances = null, totalFrameDistance = 0;
 let progress = 0, target = 0, velocity = 0;
 let pointerX = 0, pointerY = 0, previousTime = performance.now(), paperFaceted = true;
 const foldedFrame = 0;
+const closedHold = 0.16;
 
 async function preparePaper() {
   const metaResponse = await fetch("./assets/paper-cache/paper-cache.json");
@@ -125,6 +127,20 @@ async function preparePaper() {
       : Promise.resolve(null),
   ]);
   cache = frames;
+  const stride = metadata.vertices * 3;
+  frameDistances = new Float32Array(metadata.frames);
+  for (let frameIndex = 1; frameIndex < metadata.frames; frameIndex += 1) {
+    const previousOffset = (frameIndex - 1) * stride;
+    const currentOffset = frameIndex * stride;
+    let squaredTravel = 0;
+    for (let index = 0; index < stride; index += 1) {
+      const movement = frames[currentOffset + index] - frames[previousOffset + index];
+      squaredTravel += movement * movement;
+    }
+    const frameTravel = Math.sqrt(squaredTravel / metadata.vertices);
+    frameDistances[frameIndex] = frameDistances[frameIndex - 1] + frameTravel;
+  }
+  totalFrameDistance = frameDistances[metadata.frames - 1];
   visualGroups = groups;
   tipCorrection = null;
   position = new THREE.BufferAttribute(new Float32Array(metadata.vertices * 3), 3);
@@ -164,6 +180,23 @@ function smootherstep(value) {
   return t * t * t * (t * (t * 6 - 15) + 10);
 }
 
+function frameAtTravel(playback) {
+  if (!frameDistances || totalFrameDistance <= 0) {
+    return foldedFrame + playback * (metadata.frames - 1 - foldedFrame);
+  }
+  const travel = THREE.MathUtils.clamp(playback, 0, 1) * totalFrameDistance;
+  let low = foldedFrame;
+  let high = metadata.frames - 1;
+  while (high - low > 1) {
+    const middle = (low + high) >> 1;
+    if (frameDistances[middle] <= travel) low = middle;
+    else high = middle;
+  }
+  const start = frameDistances[low];
+  const span = Math.max(frameDistances[high] - start, 1e-7);
+  return low + THREE.MathUtils.clamp((travel - start) / span, 0, 1);
+}
+
 function buildTipCorrection(frames, frameIndex = 0) {
   const correction = new Float32Array(metadata.vertices * 3);
   const frameOffset = frameIndex * metadata.vertices * 3;
@@ -201,10 +234,14 @@ function buildTipCorrection(frames, frameIndex = 0) {
 function updateGeometry(amount, force = false) {
   if (!paper || !cache) return;
   const eased = smootherstep(amount);
-  // Complete the physical compaction before the interaction settles. The
-  // final 16% holds frame zero, so no centre fold happens at the very end.
-  const foldPlayback = smootherstep(THREE.MathUtils.clamp((amount - 0.16) / 0.84, 0, 1));
-  const frame = foldedFrame + foldPlayback * (metadata.frames - 1 - foldedFrame);
+  // The cache frames contain very different amounts of movement. Map the
+  // interaction to cumulative surface travel so neither direction hesitates
+  // on dense frames or rushes through large folds. The spring below supplies
+  // the only easing, avoiding stacked slow zones in the middle of the motion.
+  // The compact silhouette still owns a short hidden hold; animate() skips
+  // over it at either end so it cannot become a visible delay.
+  const foldPlayback = THREE.MathUtils.clamp((amount - closedHold) / (1 - closedHold), 0, 1);
+  const frame = frameAtTravel(foldPlayback);
   const a = Math.min(Math.floor(frame), metadata.frames - 1);
   const b = Math.min(a + 1, metadata.frames - 1);
   const mix = frame - a, stride = metadata.vertices * 3;
@@ -352,10 +389,11 @@ function animate(now) {
   previousTime = now;
   if (reduceMotion) progress = target;
   else {
-    const acceleration = (target - progress) * 3.6 - velocity * 3.8;
+    const springTarget = target === 0 ? closedHold : 1;
+    const acceleration = (springTarget - progress) * 10.24 - velocity * 6.4;
     velocity += acceleration * delta;
     progress += velocity * delta;
-    if (Math.abs(target - progress) < 0.00035 && Math.abs(velocity) < 0.002) { progress = target; velocity = 0; }
+    if (Math.abs(springTarget - progress) < 0.003 && Math.abs(velocity) < 0.015) { progress = target; velocity = 0; }
   }
   updateGeometry(THREE.MathUtils.clamp(progress, 0, 1));
   const lightOpen = smootherstep(THREE.MathUtils.clamp(progress, 0, 1));
@@ -370,6 +408,7 @@ function animate(now) {
 control.addEventListener("click", () => {
   if (!paper) return;
   target = target > 0.5 ? 0 : 1;
+  if (target === 1 && progress < closedHold) { progress = closedHold; velocity = Math.max(velocity, 0); }
   const isOpen = target === 1;
   control.classList.toggle("is-open", isOpen);
   control.setAttribute("aria-pressed", String(isOpen));
