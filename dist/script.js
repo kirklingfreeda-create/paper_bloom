@@ -21,6 +21,28 @@ const rimLight = new THREE.DirectionalLight(0xc7d9df, 0.74);
 rimLight.position.set(4.2, -2.2, 5.2);
 scene.add(rimLight);
 
+const creasePaths = [
+  [[0.10, 0.15], [0.20, 0.23], [0.31, 0.31], [0.43, 0.42], [0.53, 0.56], [0.68, 0.68], [0.86, 0.83]],
+  [[0.31, 0.31], [0.39, 0.22], [0.47, 0.12], [0.55, 0.07]],
+  [[0.43, 0.42], [0.57, 0.35], [0.70, 0.27], [0.83, 0.21]],
+  [[0.53, 0.56], [0.41, 0.66], [0.27, 0.76], [0.11, 0.87]],
+  [[0.07, 0.47], [0.21, 0.45], [0.34, 0.48], [0.43, 0.42]],
+  [[0.68, 0.68], [0.76, 0.79], [0.75, 0.92]],
+  [[0.27, 0.76], [0.34, 0.88], [0.42, 0.96]],
+  [[0.70, 0.27], [0.79, 0.37], [0.91, 0.43]],
+];
+
+function strokeCreasePaths(context, width, height, offsetX = 0, offsetY = 0) {
+  for (const path of creasePaths) {
+    context.beginPath();
+    context.moveTo(path[0][0] * width + offsetX, path[0][1] * height + offsetY);
+    for (let index = 1; index < path.length; index += 1) {
+      context.lineTo(path[index][0] * width + offsetX, path[index][1] * height + offsetY);
+    }
+    context.stroke();
+  }
+}
+
 function makePaperGrain() {
   const canvas = document.createElement("canvas");
   canvas.width = canvas.height = 512;
@@ -44,6 +66,15 @@ function makePaperGrain() {
     context.quadraticCurveTo(x + length * 0.5, y + (random() - 0.5) * 5, x + length, y + (random() - 0.5) * 7);
     context.stroke();
   }
+  context.save();
+  context.globalAlpha = 0.62;
+  context.strokeStyle = "#4f5354";
+  context.lineWidth = 2.2;
+  context.lineCap = "round";
+  context.lineJoin = "round";
+  context.filter = "blur(0.7px)";
+  strokeCreasePaths(context, canvas.width, canvas.height);
+  context.restore();
   const texture = new THREE.CanvasTexture(canvas);
   texture.wrapS = texture.wrapT = THREE.ClampToEdgeWrapping;
   return texture;
@@ -79,12 +110,31 @@ function redrawPaperTexture() {
     ctx.font = "28px Georgia, serif";
     ctx.fillText(copy.body, textureCanvas.width / 2, 475);
   }
+  ctx.save();
+  ctx.globalCompositeOperation = "multiply";
+  ctx.globalAlpha = 0.18;
+  ctx.strokeStyle = "#46545a";
+  ctx.lineWidth = 4;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.filter = "blur(1.5px)";
+  strokeCreasePaths(ctx, textureCanvas.width, textureCanvas.height);
+  ctx.restore();
+  ctx.save();
+  ctx.globalAlpha = 0.16;
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = 1.6;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.filter = "blur(0.45px)";
+  strokeCreasePaths(ctx, textureCanvas.width, textureCanvas.height, -1.1, -1.1);
+  ctx.restore();
   paperTexture.needsUpdate = true;
 }
 redrawPaperTexture();
 
 const material = new THREE.MeshPhysicalMaterial({
-  color: 0xfffdf8, map: paperTexture, bumpMap: makePaperGrain(), bumpScale: 0.085,
+  color: 0xfffdf8, map: paperTexture, bumpMap: makePaperGrain(), bumpScale: 0.11,
   roughness: 0.94, metalness: 0, clearcoat: 0, sheen: 0.12, sheenRoughness: 0.9,
   side: THREE.DoubleSide, flatShading: true, vertexColors: true,
 });
@@ -305,7 +355,11 @@ function updateGeometry(amount, force = false) {
   if (normalBlend > 0 && normalGroups) {
     const normalAttribute = geometry.getAttribute("normal");
     const normals = normalAttribute.array;
-    const openSmoothing = smootherstep((amount - 0.54) / 0.18);
+    // Hard facets begin returning as soon as a flat sheet starts to contract.
+    // The open endpoint stays smooth here; its irregular residual crease relief
+    // comes from the dedicated paper texture and bump paths above instead of
+    // exposing the hidden regular triangulation.
+    const foldEmergence = Math.sqrt(1 - smootherstep((amount - 0.80) / 0.20));
     for (const group of normalGroups.values()) {
       if (group.length < 2) continue;
       let nx = 0, ny = 0, nz = 0;
@@ -322,7 +376,7 @@ function updateGeometry(amount, force = false) {
         const facetNoise = Math.sin((facetId + 19) * 9.731) * 43758.5453;
         const facetRandom = facetNoise - Math.floor(facetNoise);
         const paperStrength = THREE.MathUtils.lerp(0.12, 0.58, facetRandom);
-        const localStrength = normalBlend * THREE.MathUtils.lerp(paperStrength, 1, openSmoothing);
+        const localStrength = normalBlend * THREE.MathUtils.lerp(1, paperStrength, foldEmergence);
         const sx = THREE.MathUtils.lerp(normals[offset], nx, localStrength);
         const sy = THREE.MathUtils.lerp(normals[offset + 1], ny, localStrength);
         const sz = THREE.MathUtils.lerp(normals[offset + 2], nz, localStrength);
