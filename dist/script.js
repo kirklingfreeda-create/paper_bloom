@@ -268,6 +268,7 @@ function updateGeometry(amount, force = false) {
   if (normalBlend > 0 && normalGroups) {
     const normalAttribute = geometry.getAttribute("normal");
     const normals = normalAttribute.array;
+    const openSmoothing = smootherstep((amount - 0.54) / 0.18);
     for (const group of normalGroups.values()) {
       if (group.length < 2) continue;
       let nx = 0, ny = 0, nz = 0;
@@ -280,9 +281,14 @@ function updateGeometry(amount, force = false) {
       nx /= groupLength; ny /= groupLength; nz /= groupLength;
       for (const vertex of group) {
         const offset = vertex * 3;
-        const sx = THREE.MathUtils.lerp(normals[offset], nx, normalBlend);
-        const sy = THREE.MathUtils.lerp(normals[offset + 1], ny, normalBlend);
-        const sz = THREE.MathUtils.lerp(normals[offset + 2], nz, normalBlend);
+        const facetId = visualGroups ? visualGroups[vertex] : Math.floor(vertex / 3);
+        const facetNoise = Math.sin((facetId + 19) * 9.731) * 43758.5453;
+        const facetRandom = facetNoise - Math.floor(facetNoise);
+        const paperStrength = THREE.MathUtils.lerp(0.12, 0.58, facetRandom);
+        const localStrength = normalBlend * THREE.MathUtils.lerp(paperStrength, 1, openSmoothing);
+        const sx = THREE.MathUtils.lerp(normals[offset], nx, localStrength);
+        const sy = THREE.MathUtils.lerp(normals[offset + 1], ny, localStrength);
+        const sz = THREE.MathUtils.lerp(normals[offset + 2], nz, localStrength);
         const length = Math.hypot(sx, sy, sz) || 1;
         normals[offset] = sx / length;
         normals[offset + 1] = sy / length;
